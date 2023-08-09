@@ -10,32 +10,32 @@ import os
 import json
 import re
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
-from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
-from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
-from datasets.formula_dataset import HMEDataset
-from models.lavis.lavis import lavis
+# from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
+# from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
+# from datasets.formula_dataset import HMEDataset
+# from models.lavis.lavis import lavis
 from models.LLaVA.LLaVA import LLaVA
-from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
-from models.MiniGPT4.MiniGPT4 import MiniGPT4
-from models.OpenFlamingo.OpenFlamingo import OpenFlamingo
-from models.BLIP2.BLIP2 import BLIP2
-from models.InstructBLIP.InstructBLIP import InstructBLIP
+# from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
+# from models.MiniGPT4.MiniGPT4 import MiniGPT4
+# from models.OpenFlamingo.OpenFlamingo import OpenFlamingo
+# from models.BLIP2.BLIP2 import BLIP2
+# from models.InstructBLIP.InstructBLIP import InstructBLIP
 import torch
 import numpy as np
 def get_model(args):
-    if args.model_name=='BLIP2':
-        model = BLIP2("/home/zhangli/.cache/huggingface/hub/models--Salesforce--blip2-opt-6.7b/snapshots/f998da12f28eb37d7e7f080cfe3291d6d9d7e1fb", args.device)
-        #model = lavis(args.BLIP2_model_name, args.BLIP2_model_type, args.device)
-    elif args.model_name=='LLaVA':
+    # if args.model_name=='BLIP2':
+    #     model = BLIP2("/home/zhangli/.cache/huggingface/hub/models--Salesforce--blip2-opt-6.7b/snapshots/f998da12f28eb37d7e7f080cfe3291d6d9d7e1fb", args.device)
+    #     #model = lavis(args.BLIP2_model_name, args.BLIP2_model_type, args.device)
+    if args.model_name=='LLaVA' or args.model_name=='llavar' or args.model_name=='llava_llama_2' or args.model_name=='llava_13b':
         model = LLaVA(args.LLaVA_model_path, args.device)
-    elif args.model_name=='MiniGPT4':
-        model = MiniGPT4(args, args.device)
-    elif args.model_name=='mPLUG':
-        model = mPLUG(args.mPLUG_model_name, args.device)
-    elif args.model_name=='OpenFlamingo':
-        model = OpenFlamingo(args.llama_path, args.check_point, args.device)
-    elif args.model_name == 'instructblip':
-        model = InstructBLIP('blip2_vicuna_instruct',args.device)
+    # elif args.model_name=='MiniGPT4':
+    #     model = MiniGPT4(args, args.device)
+    # elif args.model_name=='mPLUG':
+    #     model = mPLUG(args.mPLUG_model_name, args.device)
+    # elif args.model_name=='OpenFlamingo':
+    #     model = OpenFlamingo(args.llama_path, args.check_point, args.device)
+    # elif args.model_name == 'instructblip':
+    #     model = InstructBLIP('blip2_vicuna_instruct',args.device)
     return model
 def has_word(sentence, word):
     pattern = r"\b" + re.escape(word) + r"\b"
@@ -275,20 +275,23 @@ def evaluate_VQA(
     dataset_name,
     time,
     batch_size=1,
-    answer_path='./answers'
+    answer_path='./answers',
+    conv_template="llava_llama_2"
 ):
     predictions=[]
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
         batch = batch[0]
-        output = model.generate(image=batch['image_path'], question=batch['question'])
+        output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
         answer_dict={'question':batch['question'], 'answer':output, 
         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
         'model_name':model_name}
+        print("MMOCR output", output)
         predictions.append(answer_dict)
-    answer_dir = os.path.join(answer_path, time)
+    answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
     os.makedirs(answer_dir, exist_ok=True)
+
     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
     with open(answer_path, "w") as f:
         f.write(json.dumps(predictions, indent=4))
@@ -305,125 +308,126 @@ def evaluate_VQA(
             num+=1
     print(f'{dataset_name}:{float(correct)/num}')
     return float(correct)/num
-def evaluate_OCR(
-    model,
-    dataset,
-    model_name,
-    dataset_name,
-    time,
-    question='what is written in the image?',
-    batch_size=1,
-    answer_path='./answers'
-):
-    predictions=[]
-    for batch in more_itertools.chunked(
-        tqdm(dataset, desc="Running inference"), batch_size
-    ):
-        batch = batch[0]
-        output = model.generate(image=batch['image_path'], question=question)
-        answer_dict={'question':question, 'answer':output, 
-        'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-        'model_name':model_name}
-        predictions.append(answer_dict)
-    answer_dir = os.path.join(answer_path, time)
-    os.makedirs(answer_dir, exist_ok=True)
-    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-    with open(answer_path, "w") as f:
-        f.write(json.dumps(predictions, indent=4))
-    correct = 0
-    num = 0
-    with open(answer_path, 'r') as f:
-        dict = json.load(f)
-        for i in range(len(dict)):
-            gt_answers = dict[i]['gt_answers']
-            answer = dict[i]['answer']
-            gt_answers = remove_special_chars(gt_answers).lower()
-            answer = remove_special_chars(answer).lower()
-            if has_word(answer, gt_answers):
-                correct+=1
-            num+=1
-    print(f'{dataset_name}:{float(correct)/num}')
-    return float(correct)/num
 
-def evaluate_ReCTS(
-    model,
-    dataset,
-    model_name,
-    dataset_name,
-    time,
-    #question='图像中的中文是什么？',
-    question = 'What are the Chinese characters in the image?',
-    batch_size=1,
-    answer_path='./answers'
-):
-    predictions=[]
-    for batch in more_itertools.chunked(
-        tqdm(dataset, desc="Running inference"), batch_size
-    ):
-        batch = batch[0]
-        output = model.generate(image=batch['image_path'], question=question)
-        answer_dict={'question':question, 'answer':output, 
-        'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-        'model_name':model_name}
-        predictions.append(answer_dict)
-    answer_dir = os.path.join(answer_path, time)
-    os.makedirs(answer_dir, exist_ok=True)
-    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-    with open(answer_path, "w") as f:
-        f.write(json.dumps(predictions, indent=4))
-    correct = 0
-    num = 0
-    with open(answer_path, 'r') as f:
-        dict = json.load(f)
-        for i in range(len(dict)):
-            gt_answers = dict[i]['gt_answers']
-            answer = dict[i]['answer']
-            gt_answers = re.sub(r'[^\u4e00-\u9fa5\s]+', '', gt_answers)
-            answer = re.sub(r'[^\u4e00-\u9fa5\s]+', '', answer)
-            if gt_answers in answer:
-                correct+=1
-            num+=1
-    print(f'{dataset_name}:{float(correct)/num}')
-    return float(correct)/num
+# def evaluate_OCR(
+#     model,
+#     dataset,
+#     model_name,
+#     dataset_name,
+#     time,
+#     question='what is written in the image?',
+#     batch_size=1,
+#     answer_path='./answers'
+# ):
+#     predictions=[]
+#     for batch in more_itertools.chunked(
+#         tqdm(dataset, desc="Running inference"), batch_size
+#     ):
+#         batch = batch[0]
+#         output = model.generate(image=batch['image_path'], question=question)
+#         answer_dict={'question':question, 'answer':output, 
+#         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
+#         'model_name':model_name}
+#         predictions.append(answer_dict)
+#     answer_dir = os.path.join(answer_path, time)
+#     os.makedirs(answer_dir, exist_ok=True)
+#     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+#     with open(answer_path, "w") as f:
+#         f.write(json.dumps(predictions, indent=4))
+#     correct = 0
+#     num = 0
+#     with open(answer_path, 'r') as f:
+#         dict = json.load(f)
+#         for i in range(len(dict)):
+#             gt_answers = dict[i]['gt_answers']
+#             answer = dict[i]['answer']
+#             gt_answers = remove_special_chars(gt_answers).lower()
+#             answer = remove_special_chars(answer).lower()
+#             if has_word(answer, gt_answers):
+#                 correct+=1
+#             num+=1
+#     print(f'{dataset_name}:{float(correct)/num}')
+#     return float(correct)/num
 
-def evaluate_Formula(
-    model,
-    dataset,
-    model_name,
-    dataset_name,
-    time,
-    question='Please write out the expression of the formula in the image using LaTeX format.',
-    batch_size=1,
-    answer_path='./answers'
-):
-    #Please write out the expression of the formula in the image using LaTeX format.
-    predictions=[]
-    for batch in more_itertools.chunked(
-        tqdm(dataset, desc="Running inference"), batch_size
-    ):
-        batch = batch[0]
-        output = model.generate(image=batch['image_path'], question=question)
-        answer_dict={'question':question, 'answer':output, 
-        'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-        'model_name':model_name}
-        predictions.append(answer_dict)
-    answer_dir = os.path.join(answer_path, time)
-    os.makedirs(answer_dir, exist_ok=True)
-    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-    with open(answer_path, "w") as f:
-        f.write(json.dumps(predictions, indent=4))
-    correct = 0
-    num = 0
-    with open(answer_path, 'r') as f:
-        dict = json.load(f)
-        for i in range(len(dict)):
-            gt_answers = re.sub(r'\s+', '', dict[i]['gt_answers'])
-            answer = re.sub(r'\s+', '', dict[i]['answer'])
-            if gt_answers in answer:
-                correct+=1
-            num+=1
-    print(f'{dataset_name}:{float(correct)/num}')
-    return float(correct)/num           
+# def evaluate_ReCTS(
+#     model,
+#     dataset,
+#     model_name,
+#     dataset_name,
+#     time,
+#     #question='图像中的中文是什么？',
+#     question = 'What are the Chinese characters in the image?',
+#     batch_size=1,
+#     answer_path='./answers'
+# ):
+#     predictions=[]
+#     for batch in more_itertools.chunked(
+#         tqdm(dataset, desc="Running inference"), batch_size
+#     ):
+#         batch = batch[0]
+#         output = model.generate(image=batch['image_path'], question=question)
+#         answer_dict={'question':question, 'answer':output, 
+#         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
+#         'model_name':model_name}
+#         predictions.append(answer_dict)
+#     answer_dir = os.path.join(answer_path, time)
+#     os.makedirs(answer_dir, exist_ok=True)
+#     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+#     with open(answer_path, "w") as f:
+#         f.write(json.dumps(predictions, indent=4))
+#     correct = 0
+#     num = 0
+#     with open(answer_path, 'r') as f:
+#         dict = json.load(f)
+#         for i in range(len(dict)):
+#             gt_answers = dict[i]['gt_answers']
+#             answer = dict[i]['answer']
+#             gt_answers = re.sub(r'[^\u4e00-\u9fa5\s]+', '', gt_answers)
+#             answer = re.sub(r'[^\u4e00-\u9fa5\s]+', '', answer)
+#             if gt_answers in answer:
+#                 correct+=1
+#             num+=1
+#     print(f'{dataset_name}:{float(correct)/num}')
+#     return float(correct)/num
+
+# def evaluate_Formula(
+#     model,
+#     dataset,
+#     model_name,
+#     dataset_name,
+#     time,
+#     question='Please write out the expression of the formula in the image using LaTeX format.',
+#     batch_size=1,
+#     answer_path='./answers'
+# ):
+#     #Please write out the expression of the formula in the image using LaTeX format.
+#     predictions=[]
+#     for batch in more_itertools.chunked(
+#         tqdm(dataset, desc="Running inference"), batch_size
+#     ):
+#         batch = batch[0]
+#         output = model.generate(image=batch['image_path'], question=question)
+#         answer_dict={'question':question, 'answer':output, 
+#         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
+#         'model_name':model_name}
+#         predictions.append(answer_dict)
+#     answer_dir = os.path.join(answer_path, time)
+#     os.makedirs(answer_dir, exist_ok=True)
+#     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+#     with open(answer_path, "w") as f:
+#         f.write(json.dumps(predictions, indent=4))
+#     correct = 0
+#     num = 0
+#     with open(answer_path, 'r') as f:
+#         dict = json.load(f)
+#         for i in range(len(dict)):
+#             gt_answers = re.sub(r'\s+', '', dict[i]['gt_answers'])
+#             answer = re.sub(r'\s+', '', dict[i]['answer'])
+#             if gt_answers in answer:
+#                 correct+=1
+#             num+=1
+#     print(f'{dataset_name}:{float(correct)/num}')
+#     return float(correct)/num           
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Demo")
@@ -556,14 +560,15 @@ def parse_args():
     )
     #BLIP2
     #parser.add_argument("--BLIP2_model_path", type=str, default="/home/zhangli/GPT4/BLIP2-flant5")
-    parser.add_argument("--BLIP2_model_name", type=str, default="blip2_opt")#blip2_t5  blip2_opt blip2_vicuna_instruct
-    parser.add_argument("--BLIP2_model_type", type=str, default="pretrain_opt6.7b")#pretrain_flant5xxl pretrain_opt6.7b vicuna13b
+    # parser.add_argument("--BLIP2_model_name", type=str, default="blip2_opt")#blip2_t5  blip2_opt blip2_vicuna_instruct
+    # parser.add_argument("--BLIP2_model_type", type=str, default="pretrain_opt6.7b")#pretrain_flant5xxl pretrain_opt6.7b vicuna13b
     #LLaVA
     parser.add_argument("--LLaVA_model_path", type=str, default="./models/LLaVA/model_weight")
+    parser.add_argument("--LLaVA_conv_template", type=str, default="llava_llama_2")
     #miniGPT4
-    parser.add_argument("--MiniGPT4_cfg_path", type=str, default="./models/MiniGPT4/eval_configs/minigpt4_eval.yaml")
-    #mPLUG
-    parser.add_argument("--mPLUG_model_name", type=str, default="MAGAer13/mplug-owl-llama-7b")
+    # parser.add_argument("--MiniGPT4_cfg_path", type=str, default="./models/MiniGPT4/eval_configs/minigpt4_eval.yaml")
+    # #mPLUG
+    # parser.add_argument("--mPLUG_model_name", type=str, default="MAGAer13/mplug-owl-llama-7b")
     #parser.add_argument("--mPLUG_tokenizer_path", type=str, default="./models/mPLUG_Owl/model_weight/tokenizer.model")
     #OpenFlamingo
     parser.add_argument("--llama_path", type=str, default="/home/zhangli/llama_models/llama/llama-7b")
@@ -580,78 +585,87 @@ def main(args):
     model = get_model(args)
     '''ocr_dataset_name=['IIIT5K','svt','IC13_857','IC15_1811','svtp','ct80',
                   'cocotext','ctw','totaltext','HOST','WOST','WordArt']'''
-    ocr_dataset_name = args.ocr_dataset_name.split()
+    # ocr_dataset_name = args.ocr_dataset_name.split()
     result = {}
     time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    if args.eval_textVQA or args.eval_all:
-        dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time)
-        result['textVQA'] = acc
+    ## my comment - starts
+    # if args.eval_textVQA or args.eval_all:
+    #     dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time)
+    #     result['textVQA'] = acc
+    ## my comment - ends
+
     if args.eval_docVQA or args.eval_all:
         dataset = docVQADataset(args.docVQA_image_dir_path, args.docVQA_ann_path)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time)
+        start_time = datetime.datetime.now()
+        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template)
+        print(f"time taken {(datetime.datetime.now() - start_time).total_seconds()}")
         result['docVQA'] = acc
     #Due to network issues, it's difficult to download the entire OCR-VQA dataset. 
     # Therefore, we will extract the first 5000 questions for testing.
-    if args.eval_ocrVQA or args.eval_all:
-        dataset = ocrVQADataset(args.ocrVQA_image_dir_path, args.ocrVQA_ann_path)
-        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time)
-        result['ocrVQA'] = acc
-    
-    if args.eval_STVQA or args.eval_all:
-        dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
-        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time)
-        result['STVQA'] = acc
 
-    if args.eval_ESTVQA_CN or args.eval_all:
-        dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_CN_ann_path)
-        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_CN', time)
-        result['ESTVQA_CN'] = acc
-
-    if args.eval_ESTVQA_EN or args.eval_all:
-        dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_EN_ann_path)
-        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time)
-        result['ESTVQA_EN'] = acc
-
-    if args.eval_SROIE or args.eval_all:
-        dataset = SROIEDataset(args.SROIE_dir_path)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'SROIE', time)
-        result['SROIE'] = acc
+    ## my comment - starts
+    # if args.eval_ocrVQA or args.eval_all:
+    #     dataset = ocrVQADataset(args.ocrVQA_image_dir_path, args.ocrVQA_ann_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time)
+    #     result['ocrVQA'] = acc
     
-    if args.eval_FUNSD or args.eval_all:
-        dataset = FUNSDDataset(args.FUNSD_dir_path)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time)
-        result['FUNSD'] = acc
-    if args.eval_POIE or args.eval_all:
-        dataset = POIEDataset(args.POIE_dir_path)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'POIE', time)
-        result['POIE'] = acc
+    # if args.eval_STVQA or args.eval_all:
+    #     dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time)
+    #     result['STVQA'] = acc
+
+    # if args.eval_ESTVQA_CN or args.eval_all:
+    #     dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_CN_ann_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_CN', time)
+    #     result['ESTVQA_CN'] = acc
+
+    # if args.eval_ESTVQA_EN or args.eval_all:
+    #     dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_EN_ann_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time)
+    #     result['ESTVQA_EN'] = acc
+
+    # if args.eval_SROIE or args.eval_all:
+    #     dataset = SROIEDataset(args.SROIE_dir_path)
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'SROIE', time)
+    #     result['SROIE'] = acc
     
-    if args.eval_HME or args.eval_all:
-        dataset = HMEDataset(args.HME_image_dir_path, args.HME_ann_path)
-        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc = evaluate_Formula(model, dataset, args.model_name, 'HME', time)
-        result['HME'] = acc 
-    if args.eval_IAM or args.eval_all:
-        dataset = IAMDataset(args.IAM_dir_path)
-        dataset = torch.utils.data.Subset(dataset, range(3000))
-        acc = evaluate_OCR(model, dataset, args.model_name, 'IAM', time)
-        result['IAM'] = acc
-    if args.eval_ReCTS or args.eval_all:
-        dataset = ReCTSDataset(args.ReCTS_dir_path)
-        dataset = torch.utils.data.Subset(dataset, range(3000))
-        acc = evaluate_ReCTS(model, dataset, args.model_name, 'ReCTS', time)
-        result['ReCTS'] = acc   
-    if args.eval_ocr or args.eval_all:
-        for i in range(len(ocr_dataset_name)):
-            dataset = ocrDataset(args.ocr_dir_path, ocr_dataset_name[i])
-            acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time)
-            result[ocr_dataset_name[i]] = acc
-    result_path = os.path.join(os.path.join(args.answer_path, time), 'result.json')
+    # if args.eval_FUNSD or args.eval_all:
+    #     dataset = FUNSDDataset(args.FUNSD_dir_path)
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time)
+    #     result['FUNSD'] = acc
+    # if args.eval_POIE or args.eval_all:
+    #     dataset = POIEDataset(args.POIE_dir_path)
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'POIE', time)
+    #     result['POIE'] = acc
+    
+    # if args.eval_HME or args.eval_all:
+    #     dataset = HMEDataset(args.HME_image_dir_path, args.HME_ann_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+    #     acc = evaluate_Formula(model, dataset, args.model_name, 'HME', time)
+    #     result['HME'] = acc 
+    # if args.eval_IAM or args.eval_all:
+    #     dataset = IAMDataset(args.IAM_dir_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(3000))
+    #     acc = evaluate_OCR(model, dataset, args.model_name, 'IAM', time)
+    #     result['IAM'] = acc
+    # if args.eval_ReCTS or args.eval_all:
+    #     dataset = ReCTSDataset(args.ReCTS_dir_path)
+    #     dataset = torch.utils.data.Subset(dataset, range(3000))
+    #     acc = evaluate_ReCTS(model, dataset, args.model_name, 'ReCTS', time)
+    #     result['ReCTS'] = acc   
+    # if args.eval_ocr or args.eval_all:
+    #     for i in range(len(ocr_dataset_name)):
+    #         dataset = ocrDataset(args.ocr_dir_path, ocr_dataset_name[i])
+    #         acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time)
+    #         result[ocr_dataset_name[i]] = acc
+    ## my comment - ends
+    
+    result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}"), 'result.json')
     with open(result_path, "w") as f:
         f.write(json.dumps(result, indent=4))
 if __name__ == "__main__":
