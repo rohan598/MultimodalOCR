@@ -47,36 +47,57 @@ class KeywordsStoppingCriteria(StoppingCriteria):
                     return False
 class LLaVA:
     def __init__(self, model_path, device) -> None:
-        print("device ----- ",device)
+
         model_base = None
         model_name = "llava"
         tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, model_base, model_name)
-        vision_tower = model.get_vision_tower()
-        vision_config = vision_tower.config
+        # print(model.config)
+        mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+        if mm_use_im_start_end:
+            print("in here")
+            tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
+        vision_tower = model.get_vision_tower()
+        vision_tower.to(device = device, dtype=torch.float16)
+        vision_config = vision_tower.config
+        # print(vision_config)
+        vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
+        vision_config.use_im_start_end = mm_use_im_start_end
+        if mm_use_im_start_end:
+            print("in here 2")
+            vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
+        self.image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
         self.image_size = vision_config.image_size  
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
         self.image_processor = image_processor
 
-    def generate(self, image, question, name = 'resize', conv_template = "llava_llama_2"):
+    def generate(self, image, question, name = 'resize', conv_template = "llava_llama_2", qs_template=1, temperature = 0.2):
         #llava   textVQA none 0.32   pad  0.25   resize 30.4    ct80  none 29.5   pad 63.9    resize  61.5  
-        
+        # qs = question + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * self.image_token_len + DEFAULT_IM_END_TOKEN
         qs = question
         if self.model.config.mm_use_im_start_end:
-            qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
+            if qs_template == 1:
+                qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
+            else:
+                qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN
         else:
-            qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
+            if qs_template == 1:
+                qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
+            else:
+                qs = qs + '\n' + DEFAULT_IMAGE_TOKEN
+
         conv = conv_templates[conv_template].copy() ## added by me
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None) ## added by me
     
         prompt = conv.get_prompt()
         
-        print("MMOCR conv", conv)
-        print("MMOCR prompt", prompt)
-        print("MMOCR image size", self.image_size)
+        # print("MMOCR conv", conv)
+        # print("MMOCR prompt", prompt)
+        # print("MMOCR image size", self.image_size)
 
         inputs = self.tokenizer([prompt])
         image = Image.open(image)
@@ -102,8 +123,8 @@ class LLaVA:
                 input_ids,
                 images=image_tensor.unsqueeze(0).half().to(self.device),
                 do_sample=True,
-                temperature=0.2, # 0.9
-                max_new_tokens=1024, # 256
+                temperature=temperature, # 0.9
+                max_new_tokens=256, # 256
                 use_cache=True, # added by me
                 stopping_criteria=[stopping_criteria])
             

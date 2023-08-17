@@ -29,7 +29,7 @@ class docVQADataset(Dataset):
         ann_path= "./data/docVQA/val/val_v1.0.json",
     ):
         
-        self.data = json.load(open(ann_path, "r"))["data"]
+        self.data = json.load(open(ann_path, "r"))["data"][:5000]
         self.image_dir_path = image_dir_path
 
     def __len__(self):
@@ -89,6 +89,8 @@ class STVQADataset(Dataset):
             self.image_list.append(image_path)
             self.answer_list.append(data['data'][i]['answers'])
             self.question_list.append(data['data'][i]['question'])
+            if i+1==5000:
+                break
     def __len__(self):
         return len(self.image_list)
 

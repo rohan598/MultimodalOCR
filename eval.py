@@ -11,7 +11,7 @@ import json
 import re
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
 # from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
-# from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
+from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
 # from datasets.formula_dataset import HMEDataset
 # from models.lavis.lavis import lavis
 from models.LLaVA.LLaVA import LLaVA
@@ -276,7 +276,9 @@ def evaluate_VQA(
     time,
     batch_size=1,
     answer_path='./answers',
-    conv_template="llava_llama_2"
+    conv_template="llava_llama_2",
+    qs_template = 1,
+    temperature = 0.2
 ):
     predictions=[]
     for batch in more_itertools.chunked(
@@ -289,7 +291,7 @@ def evaluate_VQA(
         'model_name':model_name}
         print("MMOCR output", output)
         predictions.append(answer_dict)
-    answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+    answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
     os.makedirs(answer_dir, exist_ok=True)
 
     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
@@ -565,6 +567,8 @@ def parse_args():
     #LLaVA
     parser.add_argument("--LLaVA_model_path", type=str, default="./models/LLaVA/model_weight")
     parser.add_argument("--LLaVA_conv_template", type=str, default="llava_llama_2")
+    parser.add_argument("--qs_template", type=int, default=1)
+    parser.add_argument("--temperature", type=float, default=0.2)
     #miniGPT4
     # parser.add_argument("--MiniGPT4_cfg_path", type=str, default="./models/MiniGPT4/eval_configs/minigpt4_eval.yaml")
     # #mPLUG
@@ -598,7 +602,7 @@ def main(args):
     if args.eval_docVQA or args.eval_all:
         dataset = docVQADataset(args.docVQA_image_dir_path, args.docVQA_ann_path)
         start_time = datetime.datetime.now()
-        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template)
+        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
         print(f"time taken {(datetime.datetime.now() - start_time).total_seconds()}")
         result['docVQA'] = acc
     #Due to network issues, it's difficult to download the entire OCR-VQA dataset. 
@@ -611,11 +615,11 @@ def main(args):
     #     acc = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time)
     #     result['ocrVQA'] = acc
     
-    # if args.eval_STVQA or args.eval_all:
-    #     dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
-    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time)
-    #     result['STVQA'] = acc
+    if args.eval_STVQA or args.eval_all:
+        dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
+        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+        acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
+        result['STVQA'] = acc
 
     # if args.eval_ESTVQA_CN or args.eval_all:
     #     dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_CN_ann_path)
@@ -634,10 +638,10 @@ def main(args):
     #     acc = evaluate_VQA(model, dataset, args.model_name, 'SROIE', time)
     #     result['SROIE'] = acc
     
-    # if args.eval_FUNSD or args.eval_all:
-    #     dataset = FUNSDDataset(args.FUNSD_dir_path)
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time)
-    #     result['FUNSD'] = acc
+    if args.eval_FUNSD or args.eval_all:
+        dataset = FUNSDDataset(args.FUNSD_dir_path)
+        acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
+        result['FUNSD'] = acc
     # if args.eval_POIE or args.eval_all:
     #     dataset = POIEDataset(args.POIE_dir_path)
     #     acc = evaluate_VQA(model, dataset, args.model_name, 'POIE', time)
@@ -665,7 +669,7 @@ def main(args):
     #         result[ocr_dataset_name[i]] = acc
     ## my comment - ends
     
-    result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}"), 'result.json')
+    result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')
     with open(result_path, "w") as f:
         f.write(json.dumps(result, indent=4))
 if __name__ == "__main__":
