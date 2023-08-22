@@ -10,6 +10,7 @@ class textVQADataset(Dataset):
         
         self.data = json.load(open(ann_path, "r"))["data"]
         self.image_dir_path = image_dir_path
+        
     def __len__(self):
         return len(self.data)
 
@@ -29,7 +30,7 @@ class docVQADataset(Dataset):
         ann_path= "./data/docVQA/val/val_v1.0.json",
     ):
         
-        self.data = json.load(open(ann_path, "r"))["data"][:5000]
+        self.data = json.load(open(ann_path, "r"))["data"]
         self.image_dir_path = image_dir_path
 
     def __len__(self):

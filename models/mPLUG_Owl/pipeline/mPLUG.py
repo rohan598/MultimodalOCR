@@ -39,6 +39,7 @@ def get_model(pretrained_ckpt, use_bf16=False):
         tokenizer: MplugOwl text tokenizer
         processor: MplugOwl processor (including text and image)
     """
+    pretrained_ckpt = 'MAGAer13/mplug-owl-llama-7b'
     model = MplugOwlForConditionalGeneration.from_pretrained(
         pretrained_ckpt,
         torch_dtype=torch.bfloat16 if use_bf16 else torch.half,

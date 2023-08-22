@@ -10,12 +10,12 @@ import os
 import json
 import re
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
-# from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
+from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
 # from datasets.formula_dataset import HMEDataset
 # from models.lavis.lavis import lavis
 from models.LLaVA.LLaVA import LLaVA
-# from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
+from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
 # from models.MiniGPT4.MiniGPT4 import MiniGPT4
 # from models.OpenFlamingo.OpenFlamingo import OpenFlamingo
 # from models.BLIP2.BLIP2 import BLIP2
@@ -30,8 +30,8 @@ def get_model(args):
         model = LLaVA(args.LLaVA_model_path, args.device)
     # elif args.model_name=='MiniGPT4':
     #     model = MiniGPT4(args, args.device)
-    # elif args.model_name=='mPLUG':
-    #     model = mPLUG(args.mPLUG_model_name, args.device)
+    elif args.model_name=='mPLUG':
+        model = mPLUG(args.mPLUG_model_name, args.device)
     # elif args.model_name=='OpenFlamingo':
     #     model = OpenFlamingo(args.llama_path, args.check_point, args.device)
     # elif args.model_name == 'instructblip':
@@ -285,13 +285,20 @@ def evaluate_VQA(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
         batch = batch[0]
-        output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
+        if "llava" in model_name:
+            output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
+        else:
+            output = model.generate(image=batch['image_path'], question=batch['question'])
+
         answer_dict={'question':batch['question'], 'answer':output, 
         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
         'model_name':model_name}
         print("MMOCR output", output)
         predictions.append(answer_dict)
-    answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
+    if "llava" in model_name: 
+        answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
+    else:
+        answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
     os.makedirs(answer_dir, exist_ok=True)
 
     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
@@ -311,45 +318,56 @@ def evaluate_VQA(
     print(f'{dataset_name}:{float(correct)/num}')
     return float(correct)/num
 
-# def evaluate_OCR(
-#     model,
-#     dataset,
-#     model_name,
-#     dataset_name,
-#     time,
-#     question='what is written in the image?',
-#     batch_size=1,
-#     answer_path='./answers'
-# ):
-#     predictions=[]
-#     for batch in more_itertools.chunked(
-#         tqdm(dataset, desc="Running inference"), batch_size
-#     ):
-#         batch = batch[0]
-#         output = model.generate(image=batch['image_path'], question=question)
-#         answer_dict={'question':question, 'answer':output, 
-#         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-#         'model_name':model_name}
-#         predictions.append(answer_dict)
-#     answer_dir = os.path.join(answer_path, time)
-#     os.makedirs(answer_dir, exist_ok=True)
-#     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-#     with open(answer_path, "w") as f:
-#         f.write(json.dumps(predictions, indent=4))
-#     correct = 0
-#     num = 0
-#     with open(answer_path, 'r') as f:
-#         dict = json.load(f)
-#         for i in range(len(dict)):
-#             gt_answers = dict[i]['gt_answers']
-#             answer = dict[i]['answer']
-#             gt_answers = remove_special_chars(gt_answers).lower()
-#             answer = remove_special_chars(answer).lower()
-#             if has_word(answer, gt_answers):
-#                 correct+=1
-#             num+=1
-#     print(f'{dataset_name}:{float(correct)/num}')
-#     return float(correct)/num
+def evaluate_OCR(
+    model,
+    dataset,
+    model_name,
+    dataset_name,
+    time,
+    question='what is written in the image?',
+    batch_size=1,
+    answer_path='./answers',
+    conv_template="llava_llama_2",
+    qs_template = 1,
+    temperature = 0.2
+):
+    predictions=[]
+    for batch in more_itertools.chunked(
+        tqdm(dataset, desc="Running inference"), batch_size
+    ):
+        batch = batch[0]
+        if "llava" in model_name:
+            output = model.generate(image=batch['image_path'], question=question, conv_template = conv_template)
+        else:
+            output = model.generate(image=batch['image_path'], question=question)
+
+        answer_dict={'question':question, 'answer':output, 
+        'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
+        'model_name':model_name}
+        predictions.append(answer_dict)
+    if "llava" in model_name: 
+        answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
+    else:
+        answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+
+    os.makedirs(answer_dir, exist_ok=True)
+    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+    with open(answer_path, "w") as f:
+        f.write(json.dumps(predictions, indent=4))
+    correct = 0
+    num = 0
+    with open(answer_path, 'r') as f:
+        dict = json.load(f)
+        for i in range(len(dict)):
+            gt_answers = dict[i]['gt_answers']
+            answer = dict[i]['answer']
+            gt_answers = remove_special_chars(gt_answers).lower()
+            answer = remove_special_chars(answer).lower()
+            if has_word(answer, gt_answers):
+                correct+=1
+            num+=1
+    print(f'{dataset_name}:{float(correct)/num}')
+    return float(correct)/num
 
 # def evaluate_ReCTS(
 #     model,
@@ -572,8 +590,8 @@ def parse_args():
     #miniGPT4
     # parser.add_argument("--MiniGPT4_cfg_path", type=str, default="./models/MiniGPT4/eval_configs/minigpt4_eval.yaml")
     # #mPLUG
-    # parser.add_argument("--mPLUG_model_name", type=str, default="MAGAer13/mplug-owl-llama-7b")
-    #parser.add_argument("--mPLUG_tokenizer_path", type=str, default="./models/mPLUG_Owl/model_weight/tokenizer.model")
+    parser.add_argument("--mPLUG_model_name", type=str, default="MAGAer13/mplug-owl-llama-7b")
+    parser.add_argument("--mPLUG_tokenizer_path", type=str, default="./models/mPLUG_Owl/model_weight/tokenizer.model")
     #OpenFlamingo
     parser.add_argument("--llama_path", type=str, default="/home/zhangli/llama_models/llama/llama-7b")
     parser.add_argument("--check_point", type=str, default="/home/zhangli/code/open_flamingo/checkpoint/checkpoint.pt")
@@ -589,7 +607,7 @@ def main(args):
     model = get_model(args)
     '''ocr_dataset_name=['IIIT5K','svt','IC13_857','IC15_1811','svtp','ct80',
                   'cocotext','ctw','totaltext','HOST','WOST','WordArt']'''
-    # ocr_dataset_name = args.ocr_dataset_name.split()
+    ocr_dataset_name = args.ocr_dataset_name.split()
     result = {}
     time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     ## my comment - starts
@@ -605,6 +623,7 @@ def main(args):
         acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
         print(f"time taken {(datetime.datetime.now() - start_time).total_seconds()}")
         result['docVQA'] = acc
+        
     #Due to network issues, it's difficult to download the entire OCR-VQA dataset. 
     # Therefore, we will extract the first 5000 questions for testing.
 
@@ -642,6 +661,7 @@ def main(args):
         dataset = FUNSDDataset(args.FUNSD_dir_path)
         acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
         result['FUNSD'] = acc
+
     # if args.eval_POIE or args.eval_all:
     #     dataset = POIEDataset(args.POIE_dir_path)
     #     acc = evaluate_VQA(model, dataset, args.model_name, 'POIE', time)
@@ -662,14 +682,17 @@ def main(args):
     #     dataset = torch.utils.data.Subset(dataset, range(3000))
     #     acc = evaluate_ReCTS(model, dataset, args.model_name, 'ReCTS', time)
     #     result['ReCTS'] = acc   
-    # if args.eval_ocr or args.eval_all:
-    #     for i in range(len(ocr_dataset_name)):
-    #         dataset = ocrDataset(args.ocr_dir_path, ocr_dataset_name[i])
-    #         acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time)
-    #         result[ocr_dataset_name[i]] = acc
+
+    if args.eval_ocr or args.eval_all:
+        for i in range(len(ocr_dataset_name)):
+            dataset = ocrDataset(args.ocr_dir_path, ocr_dataset_name[i])
+            acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = args.answer_path)
+            result[ocr_dataset_name[i]] = acc
     ## my comment - ends
-    
-    result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')
+    if "llava" in args.model_name:
+        result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')
+    else:
+        result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}"), 'result.json')
     with open(result_path, "w") as f:
         f.write(json.dumps(result, indent=4))
 if __name__ == "__main__":
