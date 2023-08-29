@@ -9,6 +9,7 @@ import datetime
 import os
 import json
 import re
+import cv2
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
@@ -22,10 +23,30 @@ from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
 # from models.InstructBLIP.InstructBLIP import InstructBLIP
 import torch
 import numpy as np
+from PIL import Image
+from common import convert_sample_to_description
+from openai_api import openai_chat_completion
+
+LATIN_PROMPT_TEMPLATE = """
+You are asked to answer questions asked on a document image.
+
+The answers to questions are short text spans taken verbatim from the document. This means that the answers comprise a set
+of contiguous text tokens present in the document.
+Document:
+{document}
+
+Question: {question}
+
+Directly extract the answer of the question from the document with as few words as possible.
+
+Answer:
+"""
+
 def get_model(args):
     # if args.model_name=='BLIP2':
     #     model = BLIP2("/home/zhangli/.cache/huggingface/hub/models--Salesforce--blip2-opt-6.7b/snapshots/f998da12f28eb37d7e7f080cfe3291d6d9d7e1fb", args.device)
     #     #model = lavis(args.BLIP2_model_name, args.BLIP2_model_type, args.device)
+    model = None
     if args.model_name=='LLaVA' or args.model_name=='llavar' or args.model_name=='llava_llama_2' or args.model_name=='llava_13b':
         model = LLaVA(args.LLaVA_model_path, args.device)
     # elif args.model_name=='MiniGPT4':
@@ -268,6 +289,14 @@ class VQAEval:
                 outText[wordId] = self.contractions[word]
         outText = " ".join(outText)
         return outText
+
+def get_prompt_input(batch):
+    image = cv2.imread(batch["image_path"])
+    image = image[..., ::-1] 
+    doc_text = convert_sample_to_description(image)
+    prompt_input = LATIN_PROMPT_TEMPLATE.format(document=doc_text, question=batch["question"])
+    return prompt_input
+
 def evaluate_VQA(
     model,
     dataset,
@@ -287,6 +316,9 @@ def evaluate_VQA(
         batch = batch[0]
         if "llava" in model_name:
             output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
+        elif "gpt" in model_name:
+            prompt_input = get_prompt_input(batch)
+            output = openai_chat_completion(prompt_input, model_name=model_name, max_tokens_to_sample = 200, stop="\n\n", temperature=0)
         else:
             output = model.generate(image=batch['image_path'], question=batch['question'])
 
