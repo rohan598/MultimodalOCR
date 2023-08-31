@@ -10,6 +10,7 @@ import os
 import json
 import re
 import cv2
+from paddleocr import PaddleOCR
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
@@ -290,10 +291,10 @@ class VQAEval:
         outText = " ".join(outText)
         return outText
 
-def get_prompt_input(batch):
+def get_prompt_input(batch, reader):
     image = cv2.imread(batch["image_path"])
     image = image[..., ::-1] 
-    doc_text = convert_sample_to_description(image)
+    doc_text = convert_sample_to_description(image, reader)
     prompt_input = LATIN_PROMPT_TEMPLATE.format(document=doc_text, question=batch["question"])
     return prompt_input
 
@@ -310,6 +311,7 @@ def evaluate_VQA(
     temperature = 0.2
 ):
     predictions=[]
+    reader = PaddleOCR(use_angle_cls=True, lang='en')
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
@@ -317,7 +319,7 @@ def evaluate_VQA(
         if "llava" in model_name:
             output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
         elif "gpt" in model_name:
-            prompt_input = get_prompt_input(batch)
+            prompt_input = get_prompt_input(batch, reader)
             output = openai_chat_completion(prompt_input, model_name=model_name, max_tokens_to_sample = 200, stop="\n\n", temperature=0)
         else:
             output = model.generate(image=batch['image_path'], question=batch['question'])
@@ -364,12 +366,18 @@ def evaluate_OCR(
     temperature = 0.2
 ):
     predictions=[]
+    reader = PaddleOCR(use_angle_cls=True, lang='en')
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
         batch = batch[0]
         if "llava" in model_name:
             output = model.generate(image=batch['image_path'], question=question, conv_template = conv_template)
+        elif "latin" in model_name:
+            image = cv2.imread(batch["image_path"])
+            image = image[..., ::-1] 
+            output = convert_sample_to_description(image, reader)
+
         else:
             output = model.generate(image=batch['image_path'], question=question)
 

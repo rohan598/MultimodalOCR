@@ -123,6 +123,10 @@ def openai_chat_completion(prompt, model_name="gpt-35", max_tokens_to_sample: in
             print("Timeout, retrying...")
             continue
 
+        except Exception as e:
+            print(e)
+            continue
+
     return text
 
 

@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 import layoutparser as lp
-from paddleocr import PaddleOCR
+
 # Utility Functions
 
 def union_box(box1, box2):
@@ -259,9 +259,8 @@ def merge_text_boxes(text_boxes):
     return merged_text_boxes
 
 # Main function that converts final ocr to description
-def convert_sample_to_description(sample_image, box_num_threshold = 0, visualize = False):
+def convert_sample_to_description(sample_image, reader, box_num_threshold = 0, visualize = False):
     
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
     texts, text_boxes, confidence_scores = get_text_bbox_from_sample(sample_image, reader, box_num_threshold)
     
     text_boxes = merge_text_boxes(text_boxes)
