@@ -10,7 +10,7 @@ import os
 import json
 import re
 import cv2
-from paddleocr import PaddleOCR
+# from paddleocr import PaddleOCR
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
@@ -311,7 +311,8 @@ def evaluate_VQA(
     temperature = 0.2
 ):
     predictions=[]
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    # reader = PaddleOCR(use_angle_cls=True, lang='en')
+    reader = None
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
@@ -366,7 +367,8 @@ def evaluate_OCR(
     temperature = 0.2
 ):
     predictions=[]
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    # reader = PaddleOCR(use_angle_cls=True, lang='en')
+    reader=None
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
@@ -650,6 +652,7 @@ def main(args):
     ocr_dataset_name = args.ocr_dataset_name.split()
     result = {}
     time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    start_time = datetime.datetime.now()
     ## my comment - starts
     # if args.eval_textVQA or args.eval_all:
     #     dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
@@ -728,6 +731,8 @@ def main(args):
             dataset = ocrDataset(args.ocr_dir_path, ocr_dataset_name[i])
             acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = args.answer_path)
             result[ocr_dataset_name[i]] = acc
+        
+    print(f"Eval Run time {(datetime.datetime.now() - start_time).total_seconds()}")
     ## my comment - ends
     if "llava" in args.model_name:
         result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')

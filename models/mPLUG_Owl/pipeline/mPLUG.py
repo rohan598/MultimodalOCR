@@ -39,13 +39,17 @@ def get_model(pretrained_ckpt, use_bf16=False):
         tokenizer: MplugOwl text tokenizer
         processor: MplugOwl processor (including text and image)
     """
-    pretrained_ckpt = 'MAGAer13/mplug-owl-llama-7b'
+    if pretrained_ckpt == "" or pretrained_ckpt is None:
+        pretrained_ckpt = 'MAGAer13/mplug-owl-llama-7b'
+    
+    print(pretrained_ckpt)
     model = MplugOwlForConditionalGeneration.from_pretrained(
         pretrained_ckpt,
         torch_dtype=torch.bfloat16 if use_bf16 else torch.half,
     )
-    image_processor = MplugOwlImageProcessor.from_pretrained(pretrained_ckpt)
-    tokenizer = MplugOwlTokenizer.from_pretrained(pretrained_ckpt)
+    print("in here")
+    image_processor = MplugOwlImageProcessor.from_pretrained("MAGAer13/mplug-owl-llama-7b-ft")
+    tokenizer = MplugOwlTokenizer.from_pretrained("MAGAer13/mplug-owl-llama-7b-ft")
     processor = MplugOwlProcessor(image_processor, tokenizer)
     return model, tokenizer, processor
 
