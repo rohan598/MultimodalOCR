@@ -10,7 +10,7 @@ import os
 import json
 import re
 import cv2
-# from paddleocr import PaddleOCR
+from paddleocr import PaddleOCR
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
@@ -52,7 +52,7 @@ def get_model(args):
         model = LLaVA(args.LLaVA_model_path, args.device)
     # elif args.model_name=='MiniGPT4':
     #     model = MiniGPT4(args, args.device)
-    elif args.model_name=='mPLUG':
+    elif "mPLUG" in args.model_name:
         model = mPLUG(args.mPLUG_model_name, args.device)
     # elif args.model_name=='OpenFlamingo':
     #     model = OpenFlamingo(args.llama_path, args.check_point, args.device)
@@ -311,8 +311,8 @@ def evaluate_VQA(
     temperature = 0.2
 ):
     predictions=[]
-    # reader = PaddleOCR(use_angle_cls=True, lang='en')
-    reader = None
+    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    # reader = None
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
@@ -367,8 +367,8 @@ def evaluate_OCR(
     temperature = 0.2
 ):
     predictions=[]
-    # reader = PaddleOCR(use_angle_cls=True, lang='en')
-    reader=None
+    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    # reader=None
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):

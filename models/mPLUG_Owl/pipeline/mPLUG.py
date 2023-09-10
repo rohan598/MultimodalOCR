@@ -5,6 +5,8 @@ from PIL import Image, ImageOps
 from mplug_owl.modeling_mplug_owl import MplugOwlForConditionalGeneration
 from mplug_owl.tokenization_mplug_owl import MplugOwlTokenizer
 from mplug_owl.processing_mplug_owl import MplugOwlImageProcessor, MplugOwlProcessor
+from transformers.models.llama.tokenization_llama import LlamaTokenizer
+
 def resize_image(image, target_size):
     width, height = image.size
     aspect_ratio = width / height
@@ -48,8 +50,9 @@ def get_model(pretrained_ckpt, use_bf16=False):
         torch_dtype=torch.bfloat16 if use_bf16 else torch.half,
     )
     print("in here")
-    image_processor = MplugOwlImageProcessor.from_pretrained("MAGAer13/mplug-owl-llama-7b-ft")
-    tokenizer = MplugOwlTokenizer.from_pretrained("MAGAer13/mplug-owl-llama-7b-ft")
+    image_processor = MplugOwlImageProcessor.from_pretrained(pretrained_ckpt)
+    tokenizer = LlamaTokenizer.from_pretrained(pretrained_ckpt)
+    # tokenizer = MplugOwlTokenizer.from_pretrained(pretrained_ckpt)
     processor = MplugOwlProcessor(image_processor, tokenizer)
     return model, tokenizer, processor
 
