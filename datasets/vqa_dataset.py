@@ -103,6 +103,7 @@ class STVQADataset(Dataset):
             "image_path": img_path,
             "question": question,
             "gt_answers": answers}
+        
 class ESTVQADataset(Dataset):
     def __init__(
         self,
@@ -129,6 +130,57 @@ class ESTVQADataset(Dataset):
         question = self.question_list[idx]
         answers = self.answer_list[idx]
         img_path = self.image_list[idx]
+        return {
+            "image_path": img_path,
+            "question": question,
+            "gt_answers": answers}
+    
+class ChartQADataset(Dataset):
+    def __init__(
+        self,
+        image_dir_path= "./test/png",
+        ann_path= "./test/test_human.json",
+    ):
+        self.image_list = []
+        self.question_list = []
+        self.answer_list = []
+        with open(ann_path,'r') as f:
+            data = json.load(f)
+            for i in range(len(data)):
+                image_path = os.path.join(image_dir_path, data[i]['imgname'])
+                self.image_list.append(image_path)
+                self.question_list.append(data[i]["query"])
+                self.answer_list.append(data[i]["label"])
+                    
+    def __len__(self):
+        return len(self.image_list)
+
+    def __getitem__(self, idx):
+        question = self.question_list[idx]
+        answers = self.answer_list[idx]
+        img_path = self.image_list[idx]
+        return {
+            "image_path": img_path,
+            "question": question,
+            "gt_answers": answers}
+    
+class InfoVQADataset(Dataset):
+    def __init__(
+        self,
+        image_dir_path= "./infographicsvqa/infographicsvqa_images",
+        ann_path= "./infographicsvqa/infographicsvqa_qas/infographicsVQA_val_v1.0_withQT",
+    ):
+        
+        self.data = json.load(open(ann_path, "r"))["data"]
+        self.image_dir_path = image_dir_path
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        question = self.data[idx]['question']
+        answers = self.data[idx]['answers']
+        img_path = os.path.join(self.image_dir_path, self.data[idx]['image_local_name'])
         return {
             "image_path": img_path,
             "question": question,

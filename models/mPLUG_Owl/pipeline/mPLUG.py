@@ -6,6 +6,7 @@ from mplug_owl.modeling_mplug_owl import MplugOwlForConditionalGeneration
 from mplug_owl.tokenization_mplug_owl import MplugOwlTokenizer
 from mplug_owl.processing_mplug_owl import MplugOwlImageProcessor, MplugOwlProcessor
 from transformers.models.llama.tokenization_llama import LlamaTokenizer
+from peft import PeftModel
 
 def resize_image(image, target_size):
     width, height = image.size
@@ -29,7 +30,7 @@ def resize_image(image, target_size):
     return padded_image
 
 
-def get_model(pretrained_ckpt, use_bf16=False):
+def get_model(pretrained_ckpt, use_bf16=False, lora_ckpt=None):
     """Model Provider with tokenizer and processor. 
 
     Args:
@@ -44,17 +45,23 @@ def get_model(pretrained_ckpt, use_bf16=False):
     if pretrained_ckpt == "" or pretrained_ckpt is None:
         pretrained_ckpt = 'MAGAer13/mplug-owl-llama-7b'
     
-    print(pretrained_ckpt)
+
     model = MplugOwlForConditionalGeneration.from_pretrained(
-        pretrained_ckpt,
-        torch_dtype=torch.bfloat16 if use_bf16 else torch.half,
-    )
-    print("in here")
+            pretrained_ckpt,
+            torch_dtype=torch.bfloat16 if use_bf16 else torch.half,
+        )
+    
+    if lora_ckpt is not None and len(lora_ckpt)>0:
+        final_model = PeftModel.from_pretrained(model=model, model_id=lora_ckpt, is_trainable=False)
+        print("Trainable params lora model")
+        final_model.print_trainable_parameters()
+    else:
+        final_model = model
+
     image_processor = MplugOwlImageProcessor.from_pretrained(pretrained_ckpt)
     tokenizer = LlamaTokenizer.from_pretrained(pretrained_ckpt)
-    # tokenizer = MplugOwlTokenizer.from_pretrained(pretrained_ckpt)
     processor = MplugOwlProcessor(image_processor, tokenizer)
-    return model, tokenizer, processor
+    return final_model, tokenizer, processor
 
 
 def do_generate(prompts, image_list, model, tokenizer, processor, use_bf16=False, **generate_kwargs):
@@ -79,8 +86,8 @@ def do_generate(prompts, image_list, model, tokenizer, processor, use_bf16=False
     sentence = tokenizer.decode(res.tolist()[0], skip_special_tokens=True)
     return sentence
 class mPLUG:
-    def __init__(self, base_model, device) -> None:
-        model, tokenizer, processor = get_model(base_model, use_bf16=True)
+    def __init__(self, base_model, device, lora_ckpt) -> None:
+        model, tokenizer, processor = get_model(base_model, use_bf16=True, lora_ckpt=lora_ckpt)
         self.model = model.to(device)
         self.tokenizer = tokenizer
         self.processor = processor

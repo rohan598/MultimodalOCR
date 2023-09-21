@@ -11,7 +11,7 @@ import json
 import re
 import cv2
 from paddleocr import PaddleOCR
-from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset
+from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset, ChartQADataset, InfoVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
 # from datasets.formula_dataset import HMEDataset
@@ -53,7 +53,7 @@ def get_model(args):
     # elif args.model_name=='MiniGPT4':
     #     model = MiniGPT4(args, args.device)
     elif "mPLUG" in args.model_name:
-        model = mPLUG(args.mPLUG_model_name, args.device)
+        model = mPLUG(args.mPLUG_model_name, args.device, args.mPLUG_lora_ckpt)
     # elif args.model_name=='OpenFlamingo':
     #     model = OpenFlamingo(args.llama_path, args.check_point, args.device)
     # elif args.model_name == 'instructblip':
@@ -72,7 +72,8 @@ def remove_special_chars(s):
     return s
 
 class VQAEval:
-    def __init__(self):
+    def __init__(self, test_lowercase=False):
+        self.test_lowercase = test_lowercase
         self.contractions = {
             "aint": "ain't",
             "arent": "aren't",
@@ -238,11 +239,13 @@ class VQAEval:
         ]
 
     def evaluate(self, answer, gt_answers):
+        
         answer = answer.replace("\n", " ")
         answer = answer.replace("\t", " ")
         answer = answer.strip()
         answer = self.processPunctuation(answer)
         answer = self.processDigitArticle(answer)
+
         if type(gt_answers)==list:
             for i in range(len(gt_answers)):
                 gt_answers[i] = gt_answers[i].replace("\n", " ")
@@ -259,6 +262,7 @@ class VQAEval:
             gt_answers = gt_answers.strip()
             gt_answers = self.processPunctuation(gt_answers)
             gt_answers = self.processDigitArticle(gt_answers)
+
             if has_word(answer, gt_answers):
                 return 1
             else:
@@ -308,38 +312,42 @@ def evaluate_VQA(
     answer_path='./answers',
     conv_template="llava_llama_2",
     qs_template = 1,
-    temperature = 0.2
+    temperature = 0.2,
+    no_pred = False,
+    test_lowercase = False
 ):
-    predictions=[]
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
-    # reader = None
-    for batch in more_itertools.chunked(
-        tqdm(dataset, desc="Running inference"), batch_size
-    ):
-        batch = batch[0]
-        if "llava" in model_name:
-            output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
-        elif "gpt" in model_name:
-            prompt_input = get_prompt_input(batch, reader)
-            output = openai_chat_completion(prompt_input, model_name=model_name, max_tokens_to_sample = 200, stop="\n\n", temperature=0)
+
+    if no_pred==False:
+        predictions=[]
+        reader = PaddleOCR(use_angle_cls=True, lang='en')
+        for batch in more_itertools.chunked(
+            tqdm(dataset, desc="Running inference"), batch_size
+        ):
+            batch = batch[0]
+            if "llava" in model_name:
+                output = model.generate(image=batch['image_path'], question=batch['question'], conv_template = conv_template)
+            elif "gpt" in model_name:
+                prompt_input = get_prompt_input(batch, reader)
+                print(f"prompt_input: {prompt_input}")
+                output = openai_chat_completion(prompt_input, model_name=model_name, max_tokens_to_sample = 200, stop="\n\n", temperature=0)
+            else:
+                output = model.generate(image=batch['image_path'], question=batch['question'])
+
+            answer_dict={'question':batch['question'], 'answer':output, 
+            'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
+            'model_name':model_name}
+            print("MMOCR output", output)
+            predictions.append(answer_dict)
+        if "llava" in model_name: 
+            answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
         else:
-            output = model.generate(image=batch['image_path'], question=batch['question'])
+            answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+        os.makedirs(answer_dir, exist_ok=True)
 
-        answer_dict={'question':batch['question'], 'answer':output, 
-        'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-        'model_name':model_name}
-        print("MMOCR output", output)
-        predictions.append(answer_dict)
-    if "llava" in model_name: 
-        answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
-    else:
-        answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
-    os.makedirs(answer_dir, exist_ok=True)
-
-    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-    with open(answer_path, "w") as f:
-        f.write(json.dumps(predictions, indent=4))
-    eval = VQAEval()
+        answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+        with open(answer_path, "w") as f:
+            f.write(json.dumps(predictions, indent=4))
+    eval = VQAEval(test_lowercase=test_lowercase)
     correct = 0
     num = 0
     with open(answer_path, 'r') as f:
@@ -364,38 +372,40 @@ def evaluate_OCR(
     answer_path='./answers',
     conv_template="llava_llama_2",
     qs_template = 1,
-    temperature = 0.2
+    temperature = 0.2,
+    no_pred = False
 ):
-    predictions=[]
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
-    # reader=None
-    for batch in more_itertools.chunked(
-        tqdm(dataset, desc="Running inference"), batch_size
-    ):
-        batch = batch[0]
-        if "llava" in model_name:
-            output = model.generate(image=batch['image_path'], question=question, conv_template = conv_template)
-        elif "latin" in model_name:
-            image = cv2.imread(batch["image_path"])
-            image = image[..., ::-1] 
-            output = convert_sample_to_description(image, reader)
+    if no_pred == False:
+        predictions=[]
+        reader = PaddleOCR(use_angle_cls=True, lang='en')
+        # reader=None
+        for batch in more_itertools.chunked(
+            tqdm(dataset, desc="Running inference"), batch_size
+        ):
+            batch = batch[0]
+            if "llava" in model_name:
+                output = model.generate(image=batch['image_path'], question=question, conv_template = conv_template)
+            elif "latin" in model_name:
+                image = cv2.imread(batch["image_path"])
+                image = image[..., ::-1] 
+                output = convert_sample_to_description(image, reader)
 
+            else:
+                output = model.generate(image=batch['image_path'], question=question)
+
+            answer_dict={'question':question, 'answer':output, 
+            'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
+            'model_name':model_name}
+            predictions.append(answer_dict)
+        if "llava" in model_name: 
+            answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
         else:
-            output = model.generate(image=batch['image_path'], question=question)
+            answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
 
-        answer_dict={'question':question, 'answer':output, 
-        'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-        'model_name':model_name}
-        predictions.append(answer_dict)
-    if "llava" in model_name: 
-        answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
-    else:
-        answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
-
-    os.makedirs(answer_dir, exist_ok=True)
-    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-    with open(answer_path, "w") as f:
-        f.write(json.dumps(predictions, indent=4))
+        os.makedirs(answer_dir, exist_ok=True)
+        answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+        with open(answer_path, "w") as f:
+            f.write(json.dumps(predictions, indent=4))
     correct = 0
     num = 0
     with open(answer_path, 'r') as f:
@@ -524,6 +534,18 @@ def parse_args():
     parser.add_argument("--ESTVQA_CN_ann_path", type=str, default="./data/ESTVQA/annotations/cn_train.json")
     parser.add_argument("--ESTVQA_EN_ann_path", type=str, default="./data/ESTVQA/annotations/en_train.json")
 
+    #ChartQA
+    parser.add_argument("--chartQA_image_dir_path", type=str, default="./test/png")
+    parser.add_argument("--chartQA_ann_path", type=str, default="./test/test_human.json")
+
+    #Infograhics VQA
+    parser.add_argument("--infoVQA_image_dir_path", type=str, default="./infographicsvqa/infographicsvqa_images")
+    parser.add_argument("--infoVQA_ann_path", type=str, default="./infographicsvqa/infographicsvqa_qas/infographicsVQA_val_v1.0_withQT")
+
+    #Screen2Words
+    parser.add_argument("--S2W_image_dir_path", type=str, default="./test/png")
+    parser.add_argument("--S2W_ann_path", type=str, default="./test/test_human.json")
+
     #SROIE
     parser.add_argument("--SROIE_dir_path", type=str, default="./data/SROIE")
 
@@ -573,6 +595,24 @@ def parse_args():
         help="Whether to evaluate on ESTVQA_EN."
     )
     parser.add_argument(
+        "--eval_chartQA",
+        action="store_true",
+        default=False,
+        help="Whether to evaluate on ChartQA."
+    )
+    parser.add_argument(
+        "--eval_infoVQA",
+        action="store_true",
+        default=False,
+        help="Whether to evaluate on Infographics VQA."
+    )
+    parser.add_argument(
+        "--eval_S2W",
+        action="store_true",
+        default=False,
+        help="Whether to evaluate on Screen2Words."
+    )
+    parser.add_argument(
         "--eval_SROIE",
         action="store_true",
         default=False,
@@ -620,6 +660,23 @@ def parse_args():
         default=False,
         help="Whether to evaluate all datasets"
     )
+    parser.add_argument(
+        "--no_pred",
+        action="store_true",
+        default=False,
+        help="if prediction already done"
+    )  
+    parser.add_argument(
+        "--test_lowercase",
+        action="store_true",
+        default=False,
+        help="reduce senstivity of eval by allowing lower case comparision"
+    )  
+    parser.add_argument(
+        "--no_pred_filename",
+        default="tmp",
+        help="if prediction already done new filename"
+    )  
     #BLIP2
     #parser.add_argument("--BLIP2_model_path", type=str, default="/home/zhangli/GPT4/BLIP2-flant5")
     # parser.add_argument("--BLIP2_model_name", type=str, default="blip2_opt")#blip2_t5  blip2_opt blip2_vicuna_instruct
@@ -633,6 +690,7 @@ def parse_args():
     # parser.add_argument("--MiniGPT4_cfg_path", type=str, default="./models/MiniGPT4/eval_configs/minigpt4_eval.yaml")
     # #mPLUG
     parser.add_argument("--mPLUG_model_name", type=str, default="MAGAer13/mplug-owl-llama-7b")
+    parser.add_argument("--mPLUG_lora_ckpt", type=str, default="")
     parser.add_argument("--mPLUG_tokenizer_path", type=str, default="./models/mPLUG_Owl/model_weight/tokenizer.model")
     #OpenFlamingo
     parser.add_argument("--llama_path", type=str, default="/home/zhangli/llama_models/llama/llama-7b")
@@ -646,7 +704,10 @@ def parse_args():
 def main(args):
     np.random.seed(0)
     max_sample_num = 5000
-    model = get_model(args)
+    if args.no_pred==False:
+        model = get_model(args)
+    else:
+        model = None
     '''ocr_dataset_name=['IIIT5K','svt','IC13_857','IC15_1811','svtp','ct80',
                   'cocotext','ctw','totaltext','HOST','WOST','WordArt']'''
     ocr_dataset_name = args.ocr_dataset_name.split()
@@ -663,9 +724,13 @@ def main(args):
     if args.eval_docVQA or args.eval_all:
         dataset = docVQADataset(args.docVQA_image_dir_path, args.docVQA_ann_path)
         start_time = datetime.datetime.now()
-        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "docVQA.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
         print(f"time taken {(datetime.datetime.now() - start_time).total_seconds()}")
         result['docVQA'] = acc
+        print("docVQA eval complete")
         
     #Due to network issues, it's difficult to download the entire OCR-VQA dataset. 
     # Therefore, we will extract the first 5000 questions for testing.
@@ -680,8 +745,12 @@ def main(args):
     if args.eval_STVQA or args.eval_all:
         dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
         dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "STVQA.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
         result['STVQA'] = acc
+        print("STVQA eval complete")
 
     # if args.eval_ESTVQA_CN or args.eval_all:
     #     dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_CN_ann_path)
@@ -689,11 +758,46 @@ def main(args):
     #     acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_CN', time)
     #     result['ESTVQA_CN'] = acc
 
-    # if args.eval_ESTVQA_EN or args.eval_all:
-    #     dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_EN_ann_path)
-    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time)
-    #     result['ESTVQA_EN'] = acc
+    if args.eval_ESTVQA_EN or args.eval_all:
+        dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_EN_ann_path)
+        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "ESTVQA_EN.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        result['ESTVQA_EN'] = acc
+        print("ESTVQA_EN eval complete")
+
+    if args.eval_chartQA or args.eval_all:
+        dataset = ChartQADataset(args.chartQA_image_dir_path, args.chartQA_ann_path)
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "chartQA.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'chartQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        result['chartQA'] = acc
+
+        print("ChartQA eval complete")
+    
+    if args.eval_infoVQA or args.eval_all:
+        dataset = InfoVQADataset(args.infoVQA_image_dir_path, args.infoVQA_ann_path)
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "infoVQA.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'infoVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        result['infoVQA'] = acc
+
+        print("InfographicsVQA eval complete")
+
+    if args.eval_S2W:
+        dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_EN_ann_path)
+        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "S2W.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'S2W', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        result['S2W'] = acc
+
+        print("Screen2Words eval complete")
 
     # if args.eval_SROIE or args.eval_all:
     #     dataset = SROIEDataset(args.SROIE_dir_path)
@@ -702,8 +806,13 @@ def main(args):
     
     if args.eval_FUNSD or args.eval_all:
         dataset = FUNSDDataset(args.FUNSD_dir_path)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature)
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "FUNSD.json")
+        acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
         result['FUNSD'] = acc
+
+        print("FUNSD eval complete")
 
     # if args.eval_POIE or args.eval_all:
     #     dataset = POIEDataset(args.POIE_dir_path)
@@ -729,15 +838,26 @@ def main(args):
     if args.eval_ocr or args.eval_all:
         for i in range(len(ocr_dataset_name)):
             dataset = ocrDataset(args.ocr_dir_path, ocr_dataset_name[i])
-            acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = args.answer_path)
+            answer_path = args.answer_path
+            if args.no_pred:
+                answer_path = os.path.join(answer_path, f"{ocr_dataset_name[i]}.json")
+            acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = answer_path, no_pred = args.no_pred)
             result[ocr_dataset_name[i]] = acc
+        
+            print(f"OCR dataset eval complete : {ocr_dataset_name[i]}")
         
     print(f"Eval Run time {(datetime.datetime.now() - start_time).total_seconds()}")
     ## my comment - ends
-    if "llava" in args.model_name:
-        result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')
+    if args.no_pred == False:
+        if "llava" in args.model_name:
+            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')
+        else:
+            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}"), 'result.json')
     else:
-        result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}"), 'result.json')
+        result_dir = os.path.join(args.answer_path+ f"_{args.no_pred_filename}")
+        os.makedirs(result_dir, exist_ok=True)
+        result_path = os.path.join(result_dir, "result.json")
+
     with open(result_path, "w") as f:
         f.write(json.dumps(result, indent=4))
 if __name__ == "__main__":
