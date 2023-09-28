@@ -53,8 +53,8 @@ def get_model(pretrained_ckpt, use_bf16=False, lora_ckpt=None):
     
     if lora_ckpt is not None and len(lora_ckpt)>0:
         final_model = PeftModel.from_pretrained(model=model, model_id=lora_ckpt, is_trainable=False)
-        print("Trainable params lora model")
-        final_model.print_trainable_parameters()
+        # print("Trainable params lora model")
+        # final_model.print_trainable_parameters()
     else:
         final_model = model
 

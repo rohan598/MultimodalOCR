@@ -11,6 +11,7 @@ import json
 import re
 import cv2
 from paddleocr import PaddleOCR
+from datasets.docit_dataset import DocitDataset
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset, ChartQADataset, InfoVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
@@ -27,6 +28,7 @@ import numpy as np
 from PIL import Image
 from common import convert_sample_to_description
 from openai_api import openai_chat_completion
+from rougeL import run_rougeL
 
 LATIN_PROMPT_TEMPLATE = """
 You are asked to answer questions asked on a document image.
@@ -339,27 +341,34 @@ def evaluate_VQA(
             print("MMOCR output", output)
             predictions.append(answer_dict)
         if "llava" in model_name: 
-            answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
+            answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}_{args.train_config}")
         else:
-            answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+            answer_dir = os.path.join(answer_path, f"{model_name}_{time}_{args.train_config}")
         os.makedirs(answer_dir, exist_ok=True)
 
         answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
         with open(answer_path, "w") as f:
             f.write(json.dumps(predictions, indent=4))
+
     eval = VQAEval(test_lowercase=test_lowercase)
-    correct = 0
-    num = 0
+    correct = []
     with open(answer_path, 'r') as f:
         dict = json.load(f)
         for i in range(len(dict)):
             gt_answers = dict[i]['gt_answers']
             answer = dict[i]['answer']
             if eval.evaluate(answer,gt_answers)==1:
-                correct+=1
-            num+=1
-    print(f'{dataset_name}:{float(correct)/num}')
-    return float(correct)/num
+                correct.append(1)
+            else:
+                correct.append(0)
+
+    cnt = 0
+    for pred in dict:
+        pred["exact_match"] = correct[cnt]
+        cnt+=1 
+
+    print(f'{dataset_name}:{float(sum(correct))/len(correct)}')
+    return float(sum(correct))/len(correct), dict, answer_path
 
 def evaluate_OCR(
     model,
@@ -398,16 +407,15 @@ def evaluate_OCR(
             'model_name':model_name}
             predictions.append(answer_dict)
         if "llava" in model_name: 
-            answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}")
+            answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}_{args.train_config}")
         else:
-            answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+            answer_dir = os.path.join(answer_path, f"{model_name}_{time}_{args.train_config}")
 
         os.makedirs(answer_dir, exist_ok=True)
         answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
         with open(answer_path, "w") as f:
             f.write(json.dumps(predictions, indent=4))
-    correct = 0
-    num = 0
+    correct = []
     with open(answer_path, 'r') as f:
         dict = json.load(f)
         for i in range(len(dict)):
@@ -416,10 +424,66 @@ def evaluate_OCR(
             gt_answers = remove_special_chars(gt_answers).lower()
             answer = remove_special_chars(answer).lower()
             if has_word(answer, gt_answers):
-                correct+=1
-            num+=1
-    print(f'{dataset_name}:{float(correct)/num}')
-    return float(correct)/num
+                correct.append(1)
+            else:
+                correct.append(0)
+
+    cnt = 0
+    for pred in dict:
+        pred["exact_match"] = correct[cnt]
+        cnt+=1 
+
+    print(f'{dataset_name}:{float(sum(correct))/len(correct)}')
+    return float(sum(correct))/len(correct), dict, answer_path
+
+def prepare_rougeL(
+    model,
+    dataset,
+    model_name,
+    dataset_name,
+    time,
+    question='what is written in the image?',
+    batch_size=1,
+    answer_path='./answers',
+    conv_template="llava_llama_2",
+    qs_template = 1,
+    temperature = 0.2,
+    no_pred = False
+):
+    predictions=[]
+    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    # reader=None
+    for batch in more_itertools.chunked(
+        tqdm(dataset, desc="Running inference"), batch_size
+    ):
+        batch = batch[0]
+        if "llava" in model_name:
+            output = model.generate(image=batch['image_path'], question=batch["question"], conv_template = conv_template)
+        elif "latin" in model_name:
+            image = cv2.imread(batch["image_path"])
+            image = image[..., ::-1] 
+            output = convert_sample_to_description(image, reader)
+
+        else:
+            print(batch['image_path'])
+            output = model.generate(image=batch['image_path'], question=batch["question"])
+
+        answer_dict={'question':batch["question"], 'answer':output, 
+        'gt_answers':batch["gt_answers"], 'image_path':batch['image_path'],
+        'model_name':model_name}
+        predictions.append(answer_dict)
+    if "llava" in model_name: 
+        answer_dir = os.path.join(answer_path, f"{model_name}_{qs_template}_{temperature}_{time}_{args.train_config}")
+    else:
+        answer_dir = os.path.join(answer_path, f"{model_name}_{time}_{args.train_config}")
+
+    os.makedirs(answer_dir, exist_ok=True)
+    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+    with open(answer_path, "w") as f:
+        f.write(json.dumps(predictions, indent=4))
+
+    return answer_path
+    
 
 # def evaluate_ReCTS(
 #     model,
@@ -677,6 +741,14 @@ def parse_args():
         default="tmp",
         help="if prediction already done new filename"
     )  
+
+    # rouge L eval
+    parser.add_argument("--eval_rougeL",
+                        action="store_true",
+                        default=False,
+                        help="Whether to evaluate on rouge L.")
+    parser.add_argument("--docit_test_filepath", default="")
+
     #BLIP2
     #parser.add_argument("--BLIP2_model_path", type=str, default="/home/zhangli/GPT4/BLIP2-flant5")
     # parser.add_argument("--BLIP2_model_name", type=str, default="blip2_opt")#blip2_t5  blip2_opt blip2_vicuna_instruct
@@ -697,6 +769,7 @@ def parse_args():
     parser.add_argument("--check_point", type=str, default="/home/zhangli/code/open_flamingo/checkpoint/checkpoint.pt")
 
     parser.add_argument("--model_name", type=str, default="BLIP2")#mPLUG,miniGPT4,LLaVA
+    parser.add_argument("--train_config", type=str, default="abc_1e1")#mPLUG,
     parser.add_argument("--device", type=str, default="cuda:0")#2,3,7
     args = parser.parse_args()
     return args
@@ -714,22 +787,35 @@ def main(args):
     result = {}
     time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     start_time = datetime.datetime.now()
-    ## my comment - starts
-    # if args.eval_textVQA or args.eval_all:
-    #     dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time)
-    #     result['textVQA'] = acc
-    ## my comment - ends
+
+    if args.eval_textVQA or args.eval_all:
+        dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
+
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "textVQA.json")
+
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+        
+        result['textVQA'] = acc
+        with open(answer_path, "w") as f:
+                        f.write(json.dumps(prediction_list, indent=4))
+
+        print("textVQA eval complete")
 
     if args.eval_docVQA or args.eval_all:
         dataset = docVQADataset(args.docVQA_image_dir_path, args.docVQA_ann_path)
-        start_time = datetime.datetime.now()
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "docVQA.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
-        print(f"time taken {(datetime.datetime.now() - start_time).total_seconds()}")
+        
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+        
         result['docVQA'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
+
         print("docVQA eval complete")
         
     #Due to network issues, it's difficult to download the entire OCR-VQA dataset. 
@@ -738,9 +824,19 @@ def main(args):
     ## my comment - starts
     # if args.eval_ocrVQA or args.eval_all:
     #     dataset = ocrVQADataset(args.ocrVQA_image_dir_path, args.ocrVQA_ann_path)
+        
+    #     answer_path = args.answer_path
+    #     if args.no_pred:
+    #         answer_path = os.path.join(answer_path, "ocrVQA.json")
+
     #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time)
+    #     acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
     #     result['ocrVQA'] = acc
+    
+    #     with open(answer_path, "w") as f:
+    #             f.write(json.dumps(prediction_list, indent=4))
+
+    #     print("ocrVQA eval complete")
     
     if args.eval_STVQA or args.eval_all:
         dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
@@ -748,43 +844,57 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "STVQA.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
-        result['STVQA'] = acc
-        print("STVQA eval complete")
 
-    # if args.eval_ESTVQA_CN or args.eval_all:
-    #     dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_CN_ann_path)
-    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_CN', time)
-    #     result['ESTVQA_CN'] = acc
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+
+        result['STVQA'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
+
+        print("STVQA eval complete")
 
     if args.eval_ESTVQA_EN or args.eval_all:
         dataset = ESTVQADataset(args.ESTVQA_image_dir_path, args.ESTVQA_EN_ann_path)
         dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
         answer_path = args.answer_path
+        
         if args.no_pred:
             answer_path = os.path.join(answer_path, "ESTVQA_EN.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+
         result['ESTVQA_EN'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
+
         print("ESTVQA_EN eval complete")
 
-    if args.eval_chartQA or args.eval_all:
-        dataset = ChartQADataset(args.chartQA_image_dir_path, args.chartQA_ann_path)
-        answer_path = args.answer_path
-        if args.no_pred:
-            answer_path = os.path.join(answer_path, "chartQA.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'chartQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
-        result['chartQA'] = acc
+    # if args.eval_chartQA or args.eval_all:
+    #     dataset = ChartQADataset(args.chartQA_image_dir_path, args.chartQA_ann_path)
+    #     answer_path = args.answer_path
+    #     if args.no_pred:
+    #         answer_path = os.path.join(answer_path, "chartQA.json")
+    #     acc = evaluate_VQA(model, dataset, args.model_name, 'chartQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
 
-        print("ChartQA eval complete")
+    #     result['chartQA'] = acc
+
+    #     with open(answer_path, "w") as f:
+    #             f.write(json.dumps(prediction_list, indent=4))
+
+    #     print("ChartQA eval complete")
     
     if args.eval_infoVQA or args.eval_all:
         dataset = InfoVQADataset(args.infoVQA_image_dir_path, args.infoVQA_ann_path)
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "infoVQA.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'infoVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'infoVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
         result['infoVQA'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
 
         print("InfographicsVQA eval complete")
 
@@ -794,8 +904,11 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "S2W.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'S2W', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'S2W', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
         result['S2W'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
 
         print("Screen2Words eval complete")
 
@@ -809,8 +922,11 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "FUNSD.json")
-        acc = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred, test_lowercase=args.test_lowercase)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
         result['FUNSD'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
 
         print("FUNSD eval complete")
 
@@ -841,20 +957,38 @@ def main(args):
             answer_path = args.answer_path
             if args.no_pred:
                 answer_path = os.path.join(answer_path, f"{ocr_dataset_name[i]}.json")
-            acc = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = answer_path, no_pred = args.no_pred)
+            acc, prediction_list, answer_path = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = answer_path, no_pred = args.no_pred)
             result[ocr_dataset_name[i]] = acc
-        
+
+            with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
             print(f"OCR dataset eval complete : {ocr_dataset_name[i]}")
-        
+
+    if args.eval_rougeL:
+        answer_path = args.answer_path
+        if args.no_pred == False:
+            dataset = DocitDataset(args.docit_test_filepath)
+            answer_path = prepare_rougeL(model, dataset, args.model_name, "Docit", time, answer_path = args.answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+        else:
+            answer_path = os.path.join(answer_path, "Docit.json")
+        rl_results, prediction_list = run_rougeL(answer_path, args)
+        result['rougeL'] = rl_results["rougeL"]
+        result['exact_match'] = rl_results["exact_match"]
+
+        with open(answer_path, "w") as f:
+            f.write(json.dumps(prediction_list, indent=4))
+        print("Rouge L eval complete")   
+    
+    
     print(f"Eval Run time {(datetime.datetime.now() - start_time).total_seconds()}")
     ## my comment - ends
     if args.no_pred == False:
         if "llava" in args.model_name:
-            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}"), 'result.json')
+            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{args.qs_template}_{args.temperature}_{time}_{args.train_config}"), 'result.json')
         else:
-            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}"), 'result.json')
+            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}_{args.train_config}"), 'result.json')
     else:
-        result_dir = os.path.join(args.answer_path+ f"_{args.no_pred_filename}")
+        result_dir = args.answer_path
         os.makedirs(result_dir, exist_ok=True)
         result_path = os.path.join(result_dir, "result.json")
 
