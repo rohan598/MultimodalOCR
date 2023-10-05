@@ -81,6 +81,7 @@ def compute_all_per_category(em_list, rougeL_list, category_dict):
 
     for k, v in category_dict.items():
         if k == "total_cnt" or len(v)<1:
+            
             continue
         metrics[f"exact_match_{k}"] = 100.0 * sum([em_list[i] for i in v]) / len(v)
         metrics[f"rougeL_{k}"] = 100.0 * sum([rougeL_list[i] for i in v]) / len(v)

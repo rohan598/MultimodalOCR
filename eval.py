@@ -300,6 +300,8 @@ class VQAEval:
 def get_prompt_input(batch, reader):
     image = cv2.imread(batch["image_path"])
     image = image[..., ::-1] 
+    # image  = cv2.resize(image, (224, 224),
+    #            interpolation = cv2.INTER_AREA)
     doc_text = convert_sample_to_description(image, reader)
     prompt_input = LATIN_PROMPT_TEMPLATE.format(document=doc_text, question=batch["question"])
     return prompt_input
@@ -569,7 +571,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Demo")
     #OCR datasets
     parser.add_argument("--ocr_dir_path", type=str, default="./data")
-    parser.add_argument("--ocr_dataset_name", type=str, default="IIIT5K svt IC13_857 IC15_1811 svtp ct80 cocotext ctw totaltext HOST WOST WordArt")
+    parser.add_argument("--ocr_dataset_name", type=str, default="IIIT5K svt IC13_857 IC15_1811 svtp ct80 cocotext ctw totaltext HOST WOST WordArt CAR_A")
     #IAM
     parser.add_argument("--IAM_dir_path", type=str, default="./data/IAM")
     #ReCTS
@@ -822,21 +824,21 @@ def main(args):
     # Therefore, we will extract the first 5000 questions for testing.
 
     ## my comment - starts
-    # if args.eval_ocrVQA or args.eval_all:
-    #     dataset = ocrVQADataset(args.ocrVQA_image_dir_path, args.ocrVQA_ann_path)
+    if args.eval_ocrVQA or args.eval_all:
+        dataset = ocrVQADataset(args.ocrVQA_image_dir_path, args.ocrVQA_ann_path)
         
-    #     answer_path = args.answer_path
-    #     if args.no_pred:
-    #         answer_path = os.path.join(answer_path, "ocrVQA.json")
+        answer_path = args.answer_path
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "ocrVQA.json")
 
-    #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-    #     acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
-    #     result['ocrVQA'] = acc
+        dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+        result['ocrVQA'] = acc
     
-    #     with open(answer_path, "w") as f:
-    #             f.write(json.dumps(prediction_list, indent=4))
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
 
-    #     print("ocrVQA eval complete")
+        print("ocrVQA eval complete")
     
     if args.eval_STVQA or args.eval_all:
         dataset = STVQADataset(args.STVQA_image_dir_path, args.STVQA_ann_path)
@@ -940,16 +942,22 @@ def main(args):
     #     dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
     #     acc = evaluate_Formula(model, dataset, args.model_name, 'HME', time)
     #     result['HME'] = acc 
-    # if args.eval_IAM or args.eval_all:
-    #     dataset = IAMDataset(args.IAM_dir_path)
-    #     dataset = torch.utils.data.Subset(dataset, range(3000))
-    #     acc = evaluate_OCR(model, dataset, args.model_name, 'IAM', time)
-    #     result['IAM'] = acc
-    # if args.eval_ReCTS or args.eval_all:
-    #     dataset = ReCTSDataset(args.ReCTS_dir_path)
-    #     dataset = torch.utils.data.Subset(dataset, range(3000))
-    #     acc = evaluate_ReCTS(model, dataset, args.model_name, 'ReCTS', time)
-    #     result['ReCTS'] = acc   
+    if args.eval_IAM or args.eval_all:
+        dataset = IAMDataset(args.IAM_dir_path)
+        dataset = torch.utils.data.Subset(dataset, range(3000))
+        answer_path = args.answer_path
+        
+        if args.no_pred:
+            answer_path = os.path.join(answer_path, "IAM.json")
+        
+        acc, prediction_list, answer_path = evaluate_OCR(model, dataset, args.model_name, 'IAM', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
+
+        result['IAM'] = acc
+
+        with open(answer_path, "w") as f:
+                f.write(json.dumps(prediction_list, indent=4))
+
+        print("FUNSD eval complete")
 
     if args.eval_ocr or args.eval_all:
         for i in range(len(ocr_dataset_name)):
