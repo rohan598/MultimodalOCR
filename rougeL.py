@@ -87,7 +87,7 @@ def compute_all_per_category(em_list, rougeL_list, category_dict):
         metrics[f"rougeL_{k}"] = 100.0 * sum([rougeL_list[i] for i in v]) / len(v)
 
     metrics = {k: round(v, 4) for k, v in metrics.items()}
-
+    print("in cat fuction",metrics)
     return metrics
 
 def compute_metrics(predictions, references, category_dict):
@@ -107,6 +107,7 @@ def compute_metrics(predictions, references, category_dict):
         ))
 
     metrics = compute_all_per_category(em, rougeL, category_dict)
+    print("before returning",metrics)
     return metrics, em, rougeL
 
 
