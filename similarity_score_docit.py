@@ -6,7 +6,7 @@ import os
 from rouge_score import rouge_scorer
 from rouge import Rouge
 from transformers import AutoTokenizer
-
+from bleurt import score as bleurt_score
 
 class GPTTokenizer:
     gpt_tokenizer = AutoTokenizer.from_pretrained("gpt2", max_length=1e5)
@@ -58,13 +58,6 @@ def rouge(prediction, ground_truth):
 
     return rougeL
 
-# def rouge(prediction, ground_truth, xlingual=False):
-#     scorer = default_rouge_scorer
-#     scores = scorer.score(prediction=prediction, target=ground_truth)
-#     print(scores["rougeL"])
-#     return scores["rougeL"].fmeasure
-
-
 def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     scores_for_ground_truths = []
     for ground_truth in ground_truths:
@@ -73,11 +66,12 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     return max(scores_for_ground_truths)
 
 
-def compute_all_per_category(em_list, rougeL_list, category_dict):
+def compute_all_per_category(em_list, rougeL_list, bleurt_scores_list, category_dict):
 
     em = 100.0 * sum(em_list) / category_dict["total_cnt"]
     rougeL = 100.0 * sum(rougeL_list) / category_dict["total_cnt"]
-    metrics = {"exact_match": em, "rougeL": rougeL}
+    bleurt_score_overall = 100.0 * sum(bleurt_scores_list) / category_dict["total_cnt"]
+    metrics = {"exact_match": em, "rougeL": rougeL, "bleurt": bleurt_score_overall}
 
     for k, v in category_dict.items():
         if k == "total_cnt" or len(v)<1:
@@ -85,33 +79,39 @@ def compute_all_per_category(em_list, rougeL_list, category_dict):
             continue
         metrics[f"exact_match_{k}"] = 100.0 * sum([em_list[i] for i in v]) / len(v)
         metrics[f"rougeL_{k}"] = 100.0 * sum([rougeL_list[i] for i in v]) / len(v)
+        metrics[f"bleurt_{k}"] = 100.0 * sum([bleurt_scores_list[i] for i in v]) / len(v)
 
     metrics = {k: round(v, 4) for k, v in metrics.items()}
-    print("in cat fuction",metrics)
     return metrics
 
 def compute_metrics(predictions, references, category_dict):
     assert len(predictions) == len(references), f"# of predictions {len(predictions)} doesn't match # of references {len(references)}."
-    em, rougeL = [], []
-    
+    em, rougeL, bleurt_scores = [], [], []
+    bleurt_scorer = bleurt_score.BleurtScorer("/local1/rwadhawan/document_understanding/models/BLEURT-20")
     for i in range((len(predictions))):
         prediction = predictions[i]
         reference = references[i]
         if reference is not list:
             reference = [reference]
+    
         em.append(metric_max_over_ground_truths(
             exact_match, prediction=prediction, ground_truths=reference
         ))
         rougeL.append(metric_max_over_ground_truths(
             rouge, prediction=prediction, ground_truths=reference
         ))
+        prediction = [prediction]
+        bleurt_scores.append(max(bleurt_scorer.score(references=reference, candidates=prediction
+        )[0],0))
+        print(max(bleurt_scorer.score(references=reference, candidates=prediction
+        )[0],0))
 
-    metrics = compute_all_per_category(em, rougeL, category_dict)
-    print("before returning",metrics)
-    return metrics, em, rougeL
+
+    metrics = compute_all_per_category(em, rougeL, bleurt_scores, category_dict)
+    return metrics, em, rougeL, bleurt_scores
 
 
-def run_rougeL(answer_path, args):
+def similarity_score(answer_path, args):
     eval_instances = {}
     with open(args.docit_test_filepath, 'r', encoding='utf-8') as fin:
         cnt = 0
@@ -148,13 +148,14 @@ def run_rougeL(answer_path, args):
         print(f"No prediction for {len(missing_predictions)} instances. Use empty string as prediction.")
 
     category_dict["total_cnt"] = len(all_predictions)
-    results, em, rougeL = compute_metrics(predictions, references, category_dict)
+    results, em, rougeL, bleurt_scores = compute_metrics(predictions, references, category_dict)
 
     # updtae prediction list
     cnt = 0
     for pred in prediction_list:
         pred["exact_match"] = 1 if em[cnt]== True else 0
         pred["rougeL"] = rougeL[cnt]
+        pred["bleurt"] = bleurt_scores[cnt]
         cnt+=1
 
     print("======== Overall Metrics ========")

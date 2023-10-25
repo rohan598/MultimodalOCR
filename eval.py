@@ -10,15 +10,16 @@ import os
 import json
 import re
 import cv2
-from paddleocr import PaddleOCR
+# from paddleocr import PaddleOCR
 from datasets.docit_dataset import DocitDataset
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset, ChartQADataset, InfoVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
 # from datasets.formula_dataset import HMEDataset
 # from models.lavis.lavis import lavis
-from MultimodalOCR.models.LLaVA.LLaVAR import LLaVAR
+from models.LLaVA.LLaVAR import LLaVAR
 from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
+from bard_api import Bard_Model
 # from models.MiniGPT4.MiniGPT4 import MiniGPT4
 # from models.OpenFlamingo.OpenFlamingo import OpenFlamingo
 # from models.BLIP2.BLIP2 import BLIP2
@@ -28,7 +29,7 @@ import numpy as np
 from PIL import Image
 from common import convert_sample_to_description
 from openai_api import openai_chat_completion
-from rougeL import run_rougeL
+from similarity_score_docit import similarity_score
 
 LATIN_PROMPT_TEMPLATE = """
 You are asked to answer questions asked on a document image.
@@ -55,6 +56,9 @@ def get_model(args):
         model = LLaVAR(args.LLaVAR_model_path, args.device)
     elif "mPLUG" in args.model_name:
         model = mPLUG(args.mPLUG_model_name, args.device, args.mPLUG_lora_ckpt)
+    elif args.model_name =="bard":
+        token = "cQgvfgpm3800ncNuJJYqIwG1uDvIrPx5YSaPh8q6sVgPWWTsNgLhDzd8Xt8eIOT7jYgeAw."
+        model = Bard_Model(token=token)
     return model
 def has_word(sentence, word):
     pattern = r"\b" + re.escape(word) + r"\b"
@@ -313,7 +317,8 @@ def evaluate_VQA(
 
     if no_pred==False:
         predictions=[]
-        reader = PaddleOCR(use_angle_cls=True, lang='en')
+        reader = None
+        # reader = PaddleOCR(use_angle_cls=True, lang='en')
         for batch in more_itertools.chunked(
             tqdm(dataset, desc="Running inference"), batch_size
         ):
@@ -371,7 +376,8 @@ def evaluate_OCR(
 ):
     if no_pred == False:
         predictions=[]
-        reader = PaddleOCR(use_angle_cls=True, lang='en')
+        reader = None
+        # reader = PaddleOCR(use_angle_cls=True, lang='en')
         for batch in more_itertools.chunked(
             tqdm(dataset, desc="Running inference"), batch_size
         ):
@@ -424,7 +430,8 @@ def prepare_rougeL(
     answer_path='./answers'
 ):
     predictions=[]
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    reader = None
+    # reader = PaddleOCR(use_angle_cls=True, lang='en')
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
@@ -451,6 +458,34 @@ def prepare_rougeL(
         f.write(json.dumps(predictions, indent=4))
 
     return answer_path
+
+def bard_pred(
+    model,
+    dataset,
+    model_name,
+    dataset_name,
+    time,
+    batch_size=1,
+    answer_path='./answers'
+):
+    predictions=[]
+    for batch in more_itertools.chunked(
+        tqdm(dataset, desc="Running inference"), batch_size
+    ):
+        batch = batch[0]
+        output = model.get_response(batch['image_path'], batch["question"])
+
+        answer_dict={'question':batch["question"], 'answer':output, 
+        'gt_answers':batch["gt_answers"], 'image_path':batch['image_path'],
+        'model_name':model_name}
+        predictions.append(answer_dict)
+
+    answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+
+    os.makedirs(answer_dir, exist_ok=True)
+    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+    with open(answer_path, "w") as f:
+        f.write(json.dumps(predictions, indent=4))
     
 # def evaluate_Formula(
 #     model,
@@ -641,11 +676,16 @@ def parse_args():
         help="Whether to evaluate on ocr."
     )
 
-    parser.add_argument("--eval_rougeL",
+    parser.add_argument("--eval_sim_score",
                         action="store_true",
                         default=False,
-                        help="Whether to evaluate on rouge L.")
-    
+                        help="Whether to evaluate on rouge L and bleurt.")
+    parser.add_argument(
+        "--run_bard",
+        action="store_true",
+        default=False,
+        help="if prediction already done"
+    )  
     parser.add_argument(
         "--eval_all",
         action="store_true",
@@ -850,45 +890,61 @@ def main(args):
                 f.write(json.dumps(prediction_list, indent=4))
             print(f"OCR dataset eval complete : {ocr_dataset_name[i]}")
 
-    if args.eval_rougeL:
+    if args.eval_sim_score:
         answer_path = args.answer_path
         if args.no_pred == False:
             dataset = DocitDataset(args.docit_test_filepath)
             answer_path = prepare_rougeL(model, dataset, args.model_name, "Docit", time, answer_path = args.answer_path)
         else:
             answer_path = os.path.join(answer_path, "Docit.json")
-        rl_results, prediction_list = run_rougeL(answer_path, args)
+        rl_results, prediction_list = similarity_score(answer_path, args)
         result['rougeL'] = rl_results["rougeL"]
+        result['bleurt'] = rl_results["bleurt"]
         result['exact_match'] = rl_results["exact_match"]
 
         result['rougeL_documents'] = rl_results["rougeL_documents"]
+        result['bleurt_documents'] = rl_results["bleurt_documents"]
         result['exact_match_documents'] = rl_results["exact_match_documents"]
         
         result['rougeL_screenshots'] = rl_results["rougeL_screenshots"]
+        result['bleurt_screenshots'] = rl_results["bleurt_screenshots"]
         result['exact_match_screenshots'] = rl_results["exact_match_screenshots"]
 
         result['rougeL_text_recognition'] = rl_results["rougeL_text_recognition"]
+        result['bleurt_text_recognition'] = rl_results["bleurt_text_recognition"]
         result['exact_match_text_recognition'] = rl_results["exact_match_text_recognition"]
 
         result['rougeL_llavar'] = rl_results["rougeL_llavar"]
+        result['bleurt_llavar'] = rl_results["bleurt_llavar"]
         result['exact_match_llavar'] = rl_results["exact_match_llavar"]
 
         with open(answer_path, "w") as f:
             f.write(json.dumps(prediction_list, indent=4))
-        print("Rouge L eval complete")   
+        print("Similarity score eval complete")   
     
-    
+    run_only_model = False
+
+    if args.run_bard:
+        run_only_model = True
+        answer_path = args.answer_path
+        dataset = DocitDataset(args.docit_test_filepath)
+        bard_pred(model, dataset, args.model_name, "Docit", time, answer_path = args.answer_path)
+        print("BARD prediction complete")   
+
+
     print(f"Eval Run time {(datetime.datetime.now() - start_time).total_seconds()}")
     ## my comment - ends
-    if args.no_pred == False:
-        result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}_{args.train_config}"), 'result.json')
-    else:
-        result_dir = args.answer_path
-        os.makedirs(result_dir, exist_ok=True)
-        result_path = os.path.join(result_dir, "result.json")
+    if run_only_model == False:
+        if args.no_pred == False:
+            result_path = os.path.join(os.path.join(args.answer_path, f"{args.model_name}_{time}_{args.train_config}"), 'result.json')
+        else:
+            result_dir = args.answer_path
+            os.makedirs(result_dir, exist_ok=True)
+            result_path = os.path.join(result_dir, "result.json")
 
-    with open(result_path, "w") as f:
-        f.write(json.dumps(result, indent=4))
+        with open(result_path, "w") as f:
+            f.write(json.dumps(result, indent=4))
+
 if __name__ == "__main__":
     args = parse_args()
     main(args)
