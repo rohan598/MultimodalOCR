@@ -12,10 +12,12 @@ def load_jsonl(path):
 class DocitDataset(Dataset):
     def __init__(
         self,
-        docit_jsonl_filepath
+        docit_jsonl_filepath,
+        is_bard = False
     ):
         
         self.data = load_jsonl(docit_jsonl_filepath)
+        self.is_bard = is_bard
         
     def __len__(self):
         return len(self.data)
@@ -23,10 +25,13 @@ class DocitDataset(Dataset):
     def __getitem__(self, idx):
         question = self.data[idx]['text'].split("Human:")[-1].split("AI:")[0]
         answers = self.data[idx]['text'].split("Human:")[-1].split("AI:")[-1]
-        img_path = self.data[idx]['image'][0] if type(self.data[idx]['image']) is list else self.data[idx]['image']
-
-        print(img_path)
+        
+        if self.is_bard:
+            img_path = self.data[idx]['image'][1]
+        else:
+            img_path = self.data[idx]['image'][0] if type(self.data[idx]['image']) is list else self.data[idx]['image']
         return {
             "image_path": img_path,
             "question": question,
-            "gt_answers": answers}
+            "gt_answers": answers,
+            "category": self.data[idx]["category"]}

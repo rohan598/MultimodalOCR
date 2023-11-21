@@ -10,16 +10,17 @@ import os
 import json
 import re
 import cv2
-# from paddleocr import PaddleOCR
+from paddleocr import PaddleOCR
 from datasets.docit_dataset import DocitDataset
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset, ESTVQADataset, ChartQADataset, InfoVQADataset
 from datasets.ocr_dataset import ocrDataset, IAMDataset, ReCTSDataset
 from datasets.kie_dataset import SROIEDataset,FUNSDDataset,POIEDataset
 # from datasets.formula_dataset import HMEDataset
 # from models.lavis.lavis import lavis
-from models.LLaVA.LLaVAR import LLaVAR
+from models.LLaVA.model_vqa import LLaVA
+from models.LLaVAR.LLaVAR import LLaVAR
 from models.mPLUG_Owl.pipeline.mPLUG import mPLUG
-from bard_api import Bard_Model
+# from bard_api import Bard_Model
 # from models.MiniGPT4.MiniGPT4 import MiniGPT4
 # from models.OpenFlamingo.OpenFlamingo import OpenFlamingo
 # from models.BLIP2.BLIP2 import BLIP2
@@ -46,19 +47,75 @@ Directly extract the answer of the question from the document with as few words 
 Answer:
 """
 
+LATIN_PROMPT_IC_TEMPLATE = """
+You are asked to answer questions asked on an image with text embedded in it. The answers to questions are short text spans taken verbatim from the image or require reasoning with the extracted. You will be given OCR text for the image, corresponding Image Caption and a Question. 
+
+## Annotation Example
+To help you understand the task, we provide some examples below.
+
+Example 1:
+
+OCR text for example 1:
+
+Image caption for example 1:
+
+Question for example 1: 
+
+Answer for example 1:
+
+Example 2:
+
+OCR text for example 2:
+
+Image caption for example 2:
+
+Question for example 2: 
+
+Answer for example 2:
+
+Now is your turn. I will give you an example.
+You should read the OCR text and Image Caption and then answer
+
+OCR text:
+{ocr_text}
+
+Image caption:
+{image_caption}
+
+Question: 
+{question}
+
+Answer:
+"""
+
+def load_jsonl(path):
+    data=[]
+    with open(path, 'r', encoding='utf-8') as reader:
+        for line in reader:
+            data.append(json.loads(line))
+    return data 
+
+def read_json_file(filepath):
+    with open(filepath) as infile:
+        data_dict = json.load(infile)
+    return data_dict
+
 def get_model(args):
     model = None
-    # if args.model_name=='LLaVA' or args.model_name=='llavar' or args.model_name=='llava_llama_2' or args.model_name=='llava_13b':
-    if args.model_name=='llava_v1.5':
-        pass
-        # model = LLaVA(args.LLaVA_model_path, args.device)
-    if args.model_name=='llavar':
+
+    if args.model_name=='llava':
+        model = LLaVA(args.LLaVA_model_path, args.LLaVA_model_base)
+
+    elif args.model_name=='llavar':
         model = LLaVAR(args.LLaVAR_model_path, args.device)
+    
     elif "mPLUG" in args.model_name:
         model = mPLUG(args.mPLUG_model_name, args.device, args.mPLUG_lora_ckpt)
+    
     elif args.model_name =="bard":
-        token = "cQgvfgpm3800ncNuJJYqIwG1uDvIrPx5YSaPh8q6sVgPWWTsNgLhDzd8Xt8eIOT7jYgeAw."
-        model = Bard_Model(token=token)
+        pass
+        # token = "cggvfgH1mJHd6PGW1Fm1CIWrjO6KTsqatcgtSoKha-s7af-VfAg4v1S7yCEM-FFxe_bZ4w."
+        # model = Bard_Model(token=token)
     return model
 def has_word(sentence, word):
     pattern = r"\b" + re.escape(word) + r"\b"
@@ -304,32 +361,58 @@ def get_prompt_input(batch, reader):
     prompt_input = LATIN_PROMPT_TEMPLATE.format(document=doc_text, question=batch["question"])
     return prompt_input
 
+def get_prompt_input_v2(batch, reader, image_caption):
+    image = cv2.imread(batch["image_path"])
+    image = image[..., ::-1] 
+    # image  = cv2.resize(image, (224, 224),
+    #            interpolation = cv2.INTER_AREA)
+    ocr_text = convert_sample_to_description(image, reader)
+    prompt_input = LATIN_PROMPT_IC_TEMPLATE.format(ocr_text=ocr_text, image_caption = image_caption, question=batch["question"])
+    return prompt_input
+
 def evaluate_VQA(
     model,
     dataset,
     model_name,
     dataset_name,
     time,
+    image_caption_filepath="",
     batch_size=1,
     answer_path='./answers',
     no_pred = False,
+    conv_mode = "llava_v1",
+    temperature = 0.2,
+    top_p = None, 
+    num_beams = 1
 ):
 
     if no_pred==False:
         predictions=[]
-        reader = None
-        # reader = PaddleOCR(use_angle_cls=True, lang='en')
+        # reader = None
+        cnt = 0
+        reader = PaddleOCR(use_angle_cls=True, lang='en')
         for batch in more_itertools.chunked(
             tqdm(dataset, desc="Running inference"), batch_size
         ):
             batch = batch[0]
             if "gpt" in model_name:
-                prompt_input = get_prompt_input(batch, reader)
+                if "ic" in model_name:
+                    image_caption_data = read_json_file(image_caption_filepath)
+                    prompt_input = get_prompt_input_v2(batch, reader, image_caption_data[cnt]["answer"])
+                else:
+                    prompt_input = get_prompt_input(batch, reader)
                 print(f"prompt_input: {prompt_input}")
                 output = openai_chat_completion(prompt_input, model_name=model_name, max_tokens_to_sample = 512, stop="\n\n", temperature=0)
+            elif "llava" in model_name:
+                output = model.generate(image=batch['image_path'], 
+                                    question=batch["question"],
+                                    conv_mode=conv_mode, 
+                                    temperature = temperature, 
+                                    top_p = top_p, 
+                                    num_beams = num_beams)
             else:
                 output = model.generate(image=batch['image_path'], question=batch['question'])
-
+            cnt+=1
             answer_dict={'question':batch['question'], 'answer':output, 
             'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
             'model_name':model_name}
@@ -372,12 +455,16 @@ def evaluate_OCR(
     question='what is written in the image?',
     batch_size=1,
     answer_path='./answers',
-    no_pred = False
+    no_pred = False,
+    conv_mode = "llava_v1",
+    temperature = 0.2,
+    top_p = None, 
+    num_beams = 1
 ):
     if no_pred == False:
         predictions=[]
-        reader = None
-        # reader = PaddleOCR(use_angle_cls=True, lang='en')
+        # reader = None
+        reader = PaddleOCR(use_angle_cls=True, lang='en')
         for batch in more_itertools.chunked(
             tqdm(dataset, desc="Running inference"), batch_size
         ):
@@ -386,6 +473,13 @@ def evaluate_OCR(
                 image = cv2.imread(batch["image_path"])
                 image = image[..., ::-1] 
                 output = convert_sample_to_description(image, reader)
+            elif "llava" in model_name:
+                output = model.generate(image=batch['image_path'], 
+                                    question=batch["question"],
+                                    conv_mode=conv_mode, 
+                                    temperature = temperature, 
+                                    top_p = top_p, 
+                                    num_beams = num_beams)
             else:
                 output = model.generate(image=batch['image_path'], question=question)
 
@@ -420,37 +514,62 @@ def evaluate_OCR(
     print(f'{dataset_name}:{float(sum(correct))/len(correct)}')
     return float(sum(correct))/len(correct), dict, answer_path
 
-def prepare_rougeL(
+def prepare_similarity_score(
     model,
     dataset,
     model_name,
     dataset_name,
     time,
+    image_caption_filepath,
     batch_size=1,
-    answer_path='./answers'
+    answer_path='./answers',
+    conv_mode = "llava_v1",
+    temperature = 0.2,
+    top_p = None, 
+    num_beams = 1
 ):
     predictions=[]
-    reader = None
-    # reader = PaddleOCR(use_angle_cls=True, lang='en')
+    reader = PaddleOCR(use_angle_cls=True, lang='en')
+    cnt = 0
+
+    if model is None:
+        if model_name!="gpt-35":
+            model_name = "gpt-35"
+            inf_type = "ocr_ic"
+            image_caption_data = read_json_file(image_caption_filepath)
+        else:
+            inf_type = "reg"
+
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
         batch = batch[0]
         if "gpt" in model_name:
-            prompt_input = get_prompt_input(batch, reader)
+            prompt_input = get_prompt_input_v2(batch, reader, image_caption_data[cnt]["answer"])
             print(f"prompt_input: {prompt_input}")
             output = openai_chat_completion(prompt_input, model_name=model_name, max_tokens_to_sample = 512, stop="\n\n", temperature=0)
 
+        elif "llava" in model_name:
+            output = model.generate(image=batch['image_path'], 
+                                    question=batch["question"],
+                                    conv_mode=conv_mode, 
+                                    temperature = temperature, 
+                                    top_p = top_p, 
+                                    num_beams = num_beams)
         else:
-            print(batch['image_path'])
             output = model.generate(image=batch['image_path'], question=batch["question"])
+        
+        cnt+=1
 
         answer_dict={'question':batch["question"], 'answer':output, 
         'gt_answers':batch["gt_answers"], 'image_path':batch['image_path'],
         'model_name':model_name}
         predictions.append(answer_dict)
 
-    answer_dir = os.path.join(answer_path, f"{model_name}_{time}_{args.train_config}")
+    if model is None:
+        answer_dir = os.path.join(answer_path, f"{model_name}_{inf_type}_{time}")
+    else: 
+        answer_dir = os.path.join(answer_path, f"{model_name}_{time}_{args.train_config}")
 
     os.makedirs(answer_dir, exist_ok=True)
     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
@@ -469,62 +588,40 @@ def bard_pred(
     answer_path='./answers'
 ):
     predictions=[]
-    for batch in more_itertools.chunked(
-        tqdm(dataset, desc="Running inference"), batch_size
-    ):
-        batch = batch[0]
-        output = model.get_response(batch['image_path'], batch["question"])
+    if os.path.exists(answer_path):
+        with open(answer_path) as fin:
+            bard_pred_data = json.load(fin)
 
-        answer_dict={'question':batch["question"], 'answer':output, 
-        'gt_answers':batch["gt_answers"], 'image_path':batch['image_path'],
-        'model_name':model_name}
-        predictions.append(answer_dict)
+        for data_item in bard_pred_data:
+           if data_item["answer"] == "":
+            # output = model.get_response(data_item['image_path'], data_item["question"])
+            # print("output: ", output)
+            # data_item["answer"]  = output
+            print(data_item["question"])
+            print(data_item["image_path"])
+            print()
+                
+        # with open(answer_path, "w") as f:
+        #     f.write(json.dumps(bard_pred_data, indent=4))
+    else:
+        for batch in more_itertools.chunked(
+            tqdm(dataset, desc="Running inference"), batch_size
+        ):
+            batch = batch[0]
+            output = model.get_response(batch['image_path'], batch["question"])
+            print("output: ", output)
 
-    answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+            answer_dict={'question':batch["question"], 'answer':output, 
+            'gt_answers':batch["gt_answers"], 'image_path':batch['image_path'],
+            'model_name':model_name}
+            predictions.append(answer_dict)
 
-    os.makedirs(answer_dir, exist_ok=True)
-    answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-    with open(answer_path, "w") as f:
-        f.write(json.dumps(predictions, indent=4))
-    
-# def evaluate_Formula(
-#     model,
-#     dataset,
-#     model_name,
-#     dataset_name,
-#     time,
-#     question='Please write out the expression of the formula in the image using LaTeX format.',
-#     batch_size=1,
-#     answer_path='./answers'
-# ):
-#     #Please write out the expression of the formula in the image using LaTeX format.
-#     predictions=[]
-#     for batch in more_itertools.chunked(
-#         tqdm(dataset, desc="Running inference"), batch_size
-#     ):
-#         batch = batch[0]
-#         output = model.generate(image=batch['image_path'], question=question)
-#         answer_dict={'question':question, 'answer':output, 
-#         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
-#         'model_name':model_name}
-#         predictions.append(answer_dict)
-#     answer_dir = os.path.join(answer_path, time)
-#     os.makedirs(answer_dir, exist_ok=True)
-#     answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
-#     with open(answer_path, "w") as f:
-#         f.write(json.dumps(predictions, indent=4))
-#     correct = 0
-#     num = 0
-#     with open(answer_path, 'r') as f:
-#         dict = json.load(f)
-#         for i in range(len(dict)):
-#             gt_answers = re.sub(r'\s+', '', dict[i]['gt_answers'])
-#             answer = re.sub(r'\s+', '', dict[i]['answer'])
-#             if gt_answers in answer:
-#                 correct+=1
-#             num+=1
-#     print(f'{dataset_name}:{float(correct)/num}')
-#     return float(correct)/num           
+        answer_dir = os.path.join(answer_path, f"{model_name}_{time}")
+
+        os.makedirs(answer_dir, exist_ok=True)
+        answer_path = os.path.join(answer_dir, f"{dataset_name}.json")
+        with open(answer_path, "w") as f:
+            f.write(json.dumps(predictions, indent=4))         
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Demo")
@@ -534,9 +631,6 @@ def parse_args():
     #IAM
     parser.add_argument("--IAM_dir_path", type=str, default="./data/IAM")
 
-    #HME100k
-    parser.add_argument("--HME_image_dir_path", type=str, default="./data/HME100K/test_images")
-    parser.add_argument("--HME_ann_path", type=str, default="./data/HME100K/test_labels.txt")
     #textVQA
     parser.add_argument("--textVQA_image_dir_path", type=str, default="./data/textVQA/train_images")
     parser.add_argument("--textVQA_ann_path", type=str, default="./data/textVQA/TextVQA_0.5.1_val.json")
@@ -557,10 +651,6 @@ def parse_args():
     parser.add_argument("--ESTVQA_CN_ann_path", type=str, default="./data/ESTVQA/annotations/cn_train.json")
     parser.add_argument("--ESTVQA_EN_ann_path", type=str, default="./data/ESTVQA/annotations/en_train.json")
 
-    #ChartQA
-    parser.add_argument("--chartQA_image_dir_path", type=str, default="./test/png")
-    parser.add_argument("--chartQA_ann_path", type=str, default="./test/test_human.json")
-
     #Infograhics VQA
     parser.add_argument("--infoVQA_image_dir_path", type=str, default="./infographicsvqa/infographicsvqa_images")
     parser.add_argument("--infoVQA_ann_path", type=str, default="./infographicsvqa/infographicsvqa_qas/infographicsVQA_val_v1.0_withQT")
@@ -569,17 +659,14 @@ def parse_args():
     parser.add_argument("--S2W_image_dir_path", type=str, default="./test/png")
     parser.add_argument("--S2W_ann_path", type=str, default="./test/test_human.json")
 
-    #SROIE
-    parser.add_argument("--SROIE_dir_path", type=str, default="./data/SROIE")
-
     #FUNSD
     parser.add_argument("--FUNSD_dir_path", type=str, default="./data/FUNSD/testing_data/annotations")
 
-    #POIE
-    parser.add_argument("--POIE_dir_path", type=str, default="./data/POIE/test.txt")
-
     # DOCIT
     parser.add_argument("--docit_test_filepath", default="")
+
+    # image caption filepath
+    parser.add_argument("--image_caption_filepath", default="")
     
     #result_path
     parser.add_argument("--answer_path", type=str, default="./answers")
@@ -609,22 +696,10 @@ def parse_args():
         help="Whether to evaluate on STVQA."
     )
     parser.add_argument(
-        "--eval_ESTVQA_CN",
-        action="store_true",
-        default=False,
-        help="Whether to evaluate on ESTVQA_CN."
-    )
-    parser.add_argument(
         "--eval_ESTVQA_EN",
         action="store_true",
         default=False,
         help="Whether to evaluate on ESTVQA_EN."
-    )
-    parser.add_argument(
-        "--eval_chartQA",
-        action="store_true",
-        default=False,
-        help="Whether to evaluate on ChartQA."
     )
     parser.add_argument(
         "--eval_infoVQA",
@@ -639,28 +714,10 @@ def parse_args():
         help="Whether to evaluate on Screen2Words."
     )
     parser.add_argument(
-        "--eval_SROIE",
-        action="store_true",
-        default=False,
-        help="Whether to evaluate on SROIE."
-    )
-    parser.add_argument(
         "--eval_FUNSD",
         action="store_true",
         default=False,
         help="Whether to evaluate on FUNSD."
-    )
-    parser.add_argument(
-        "--eval_POIE",
-        action="store_true",
-        default=False,
-        help="Whether to evaluate on POIE."
-    )
-    parser.add_argument(
-        "--eval_HME",
-        action="store_true",
-        default=False,
-        help="Whether to evaluate on HME100k."
     )
     parser.add_argument(
         "--eval_IAM",
@@ -680,12 +737,21 @@ def parse_args():
                         action="store_true",
                         default=False,
                         help="Whether to evaluate on rouge L and bleurt.")
+    
     parser.add_argument(
-        "--run_bard",
+        "--eval_bard",
         action="store_true",
         default=False,
         help="if prediction already done"
     )  
+
+    parser.add_argument(
+        "--eval_ocr_ic",
+        action="store_true",
+        default=False,
+        help="if prediction already done"
+    )  
+    
     parser.add_argument(
         "--eval_all",
         action="store_true",
@@ -707,6 +773,11 @@ def parse_args():
 
     #LLaVA
     parser.add_argument("--LLaVA_model_path", type=str, default="")
+    parser.add_argument("--LLaVA_model_base", type=str, default="")
+    parser.add_argument("--LLaVA_model_conv_mode", type=str, default="llava_v1")
+    parser.add_argument("--LLaVA_model_temperature",  type=float, default=0.2)
+    parser.add_argument("--LLaVA_model_top_p",  type=int, default=None)
+    parser.add_argument("--LLaVA_model_num_beams",  type=int, default=1)
 
     #LLaVAR
     parser.add_argument("--LLaVAR_model_path", type=str, default="")
@@ -743,8 +814,8 @@ def main(args):
         if args.no_pred:
             answer_path = os.path.join(answer_path, "textVQA.json")
 
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time, answer_path = answer_path, no_pred = args.no_pred)
-        
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
+    
         result['textVQA'] = acc
         with open(answer_path, "w") as f:
                         f.write(json.dumps(prediction_list, indent=4))
@@ -757,7 +828,7 @@ def main(args):
         if args.no_pred:
             answer_path = os.path.join(answer_path, "docVQA.json")
         
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'docVQA', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
         
         result['docVQA'] = acc
 
@@ -778,7 +849,7 @@ def main(args):
             answer_path = os.path.join(answer_path, "ocrVQA.json")
 
         dataset = torch.utils.data.Subset(dataset, range(max_sample_num))
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
         result['ocrVQA'] = acc
     
         with open(answer_path, "w") as f:
@@ -793,7 +864,7 @@ def main(args):
         if args.no_pred:
             answer_path = os.path.join(answer_path, "STVQA.json")
 
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'STVQA', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
 
         result['STVQA'] = acc
 
@@ -810,7 +881,7 @@ def main(args):
         if args.no_pred:
             answer_path = os.path.join(answer_path, "ESTVQA_EN.json")
         
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'ESTVQA_EN', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
 
         result['ESTVQA_EN'] = acc
 
@@ -825,7 +896,7 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "infoVQA.json")
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'infoVQA', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'infoVQA', time, image_caption_filepath= args.image_caption_filepath,  answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
         result['infoVQA'] = acc
 
         with open(answer_path, "w") as f:
@@ -839,7 +910,7 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "S2W.json")
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'S2W', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'S2W', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
         result['S2W'] = acc
 
         with open(answer_path, "w") as f:
@@ -852,7 +923,7 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred:
             answer_path = os.path.join(answer_path, "FUNSD.json")
-        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_VQA(model, dataset, args.model_name, 'FUNSD', time, image_caption_filepath= args.image_caption_filepath, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
         result['FUNSD'] = acc
 
         with open(answer_path, "w") as f:
@@ -868,7 +939,7 @@ def main(args):
         if args.no_pred:
             answer_path = os.path.join(answer_path, "IAM.json")
         
-        acc, prediction_list, answer_path = evaluate_OCR(model, dataset, args.model_name, 'IAM', time, answer_path = answer_path, no_pred = args.no_pred)
+        acc, prediction_list, answer_path = evaluate_OCR(model, dataset, args.model_name, 'IAM', time, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
 
         result['IAM'] = acc
 
@@ -883,7 +954,7 @@ def main(args):
             answer_path = args.answer_path
             if args.no_pred:
                 answer_path = os.path.join(answer_path, f"{ocr_dataset_name[i]}.json")
-            acc, prediction_list, answer_path = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = answer_path, no_pred = args.no_pred)
+            acc, prediction_list, answer_path = evaluate_OCR(model, dataset, args.model_name, ocr_dataset_name[i], time, answer_path = answer_path, no_pred = args.no_pred, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
             result[ocr_dataset_name[i]] = acc
 
             with open(answer_path, "w") as f:
@@ -894,7 +965,7 @@ def main(args):
         answer_path = args.answer_path
         if args.no_pred == False:
             dataset = DocitDataset(args.docit_test_filepath)
-            answer_path = prepare_rougeL(model, dataset, args.model_name, "Docit", time, answer_path = args.answer_path)
+            answer_path = prepare_similarity_score(model, dataset, args.model_name, "Docit", time, args.image_caption_filepath, answer_path = args.answer_path, conv_mode=args.LLaVA_model_conv_mode, temperature=args.LLaVA_model_temperature, top_p = args.LLaVA_model_top_p, num_beams = args.LLaVA_model_num_beams)
         else:
             answer_path = os.path.join(answer_path, "Docit.json")
         rl_results, prediction_list = similarity_score(answer_path, args)
@@ -924,14 +995,13 @@ def main(args):
     
     run_only_model = False
 
-    if args.run_bard:
+    if args.eval_bard:
         run_only_model = True
         answer_path = args.answer_path
-        dataset = DocitDataset(args.docit_test_filepath)
+        dataset = DocitDataset(args.docit_test_filepath, is_bard = True)
         bard_pred(model, dataset, args.model_name, "Docit", time, answer_path = args.answer_path)
         print("BARD prediction complete")   
-
-
+        
     print(f"Eval Run time {(datetime.datetime.now() - start_time).total_seconds()}")
     ## my comment - ends
     if run_only_model == False:
@@ -948,28 +1018,3 @@ def main(args):
 if __name__ == "__main__":
     args = parse_args()
     main(args)
-
-
-    # if args.eval_chartQA or args.eval_all:
-    #     dataset = ChartQADataset(args.chartQA_image_dir_path, args.chartQA_ann_path)
-    #     answer_path = args.answer_path
-    #     if args.no_pred:
-    #         answer_path = os.path.join(answer_path, "chartQA.json")
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'chartQA', time, answer_path = answer_path, conv_template=args.LLaVA_conv_template, qs_template = args.qs_template, temperature=args.temperature, no_pred = args.no_pred)
-
-    #     result['chartQA'] = acc
-
-    #     with open(answer_path, "w") as f:
-    #             f.write(json.dumps(prediction_list, indent=4))
-
-    #     print("ChartQA eval complete")
-
-    # if args.eval_SROIE or args.eval_all:
-    #     dataset = SROIEDataset(args.SROIE_dir_path)
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'SROIE', time)
-    #     result['SROIE'] = acc
-
-    # if args.eval_POIE or args.eval_all:
-    #     dataset = POIEDataset(args.POIE_dir_path)
-    #     acc = evaluate_VQA(model, dataset, args.model_name, 'POIE', time)
-    #     result['POIE'] = acc

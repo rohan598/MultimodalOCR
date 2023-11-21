@@ -11,7 +11,8 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 def openai_completion(prompt, model_name="gpt-35", max_tokens_to_sample: int = 200, stop="\n\n", temperature=0):
-    if model_name == "gpt-35":
+    print("MN: ",model_name)
+    if "gpt-35" in model_name:
         deployment_name = "gpt-35-turbo"
         enc = tiktoken.get_encoding("cl100k_base") 
         while len(enc.encode(prompt)) > 4096:
@@ -32,7 +33,7 @@ def openai_completion(prompt, model_name="gpt-35", max_tokens_to_sample: int = 2
                 question_idx = prompt.rfind("\n\nQuestion:")
                 prompt = prompt[:question_idx-300] + prompt[question_idx:]
     else:
-        raise ValueError("Invalid model name")
+        raise ValueError(f"Invalid model name {model_name}")
     
     # print('Sending a test completion job')
     # start_phrase = 'Write a tagline for an ice cream shop. '
@@ -69,7 +70,7 @@ def openai_completion(prompt, model_name="gpt-35", max_tokens_to_sample: int = 2
 
 
 def openai_chat_completion(prompt, model_name="gpt-35", max_tokens_to_sample: int = 200, stop="\n\n", temperature=0):
-    if model_name == "gpt-35":
+    if "gpt-35" in model_name:
         deployment_name = "gpt-35-turbo"
     else:
         raise ValueError("Invalid model name")
@@ -99,7 +100,7 @@ def openai_chat_completion(prompt, model_name="gpt-35", max_tokens_to_sample: in
             # print(messages)
 
             response = openai.ChatCompletion.create(
-                model = "gpt-3.5-turbo", 
+                model = "gpt-3.5-turbo-16k", 
                 messages=messages,
                 max_tokens=max_tokens_to_sample,
                 temperature=temperature,

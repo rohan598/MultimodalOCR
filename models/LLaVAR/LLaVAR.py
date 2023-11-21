@@ -100,8 +100,8 @@ class LLaVAR:
                 input_ids,
                 images=image_tensor.unsqueeze(0).half().to(self.device),
                 do_sample=True,
-                temperature=0.9,
-                max_new_tokens=256, 
+                temperature=0.2,
+                max_new_tokens=512, 
                 stopping_criteria=[stopping_criteria])
             
             input_token_len = input_ids.shape[1]

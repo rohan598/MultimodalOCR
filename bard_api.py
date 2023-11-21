@@ -31,8 +31,11 @@ class Bard_Model():
             patience -= 1
             # print(f"Patience: {patience}")
             try:
-                assert os.path.exists(image_path)
+                # final_image_path = os.path.join("/local1/rwadhawan/document_understanding/datasets/training/mplug_owl/test", image_path)
+                # assert os.path.exists(final_image_path)
+                
                 image = open(image_path, 'rb').read() # (jpeg, png, webp) are supported.
+                print(image_path)
                 response = self.model.ask_about_image(input_text, image)
                 response = response['content'].strip()
                 if verify_response(response):
